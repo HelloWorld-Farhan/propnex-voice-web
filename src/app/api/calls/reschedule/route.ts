@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
 
 // Use the same internal backend URL that next.config.ts uses for its fallback rewrite.
 // NEXT_PUBLIC_API_URL is a *relative* /api path for client-side use and cannot be used
@@ -29,6 +30,34 @@ export async function POST(req: NextRequest) {
         { error: "Missing required fields: campaignId, leads, scheduledAt, didNumber" },
         { status: 400 }
       );
+    }
+
+    // Verify credit balance: reject if 0 credits remaining
+    try {
+      const jwt = require("jsonwebtoken");
+      const token = authHeader.split(" ")[1];
+      const decoded: any = jwt.decode(token);
+      const userId = decoded?.sub || decoded?.id;
+      if (userId) {
+        const member = await (prisma as any).companyMember.findFirst({
+          where: { userId, status: "ACTIVE" },
+          select: { companyId: true }
+        });
+        if (member?.companyId) {
+          const creditBalance = await prisma.creditBalance.findUnique({
+            where: { companyId: member.companyId },
+            select: { creditsRemaining: true }
+          });
+          if (!creditBalance || (creditBalance.creditsRemaining ?? 0) <= 0) {
+            return NextResponse.json(
+              { error: "Cannot schedule calls. Your credit balance is 0. Please top up your account." },
+              { status: 403 }
+            );
+          }
+        }
+      }
+    } catch (e) {
+      // Allow downstream to handle if decode error occurs
     }
 
     // Forward to the backend NestJS controller: POST /api/calls/reschedule

@@ -384,6 +384,9 @@ export function OutboundPageContent() {
 
   const handleReschedule = async () => {
     try {
+      if (user?.creditBalance?.creditsRemaining !== undefined && user.creditBalance.creditsRemaining <= 0) {
+        throw new Error("Cannot schedule reactivation. Your credit balance is 0. Please top up your account.");
+      }
       setIsRescheduling(true);
       const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token");
       const fallbackLeads = outboundCampaign.leads?.filter((l: any) => l.isFailed) || [];

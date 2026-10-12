@@ -80,9 +80,9 @@ export function UserMenu({ className }: UserMenuProps) {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href="/dashboard">
+          <Link href={user?.creditBalance?.creditsRemaining !== undefined && user.creditBalance.creditsRemaining <= 0 ? "/dashboard/billing" : "/dashboard"}>
             <User className="size-4" />
-            Profile
+            {user?.creditBalance?.creditsRemaining !== undefined && user.creditBalance.creditsRemaining <= 0 ? "Billing" : "Profile"}
           </Link>
         </DropdownMenuItem>
 

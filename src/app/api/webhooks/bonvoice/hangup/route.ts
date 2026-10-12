@@ -327,6 +327,55 @@ export async function POST(req: Request) {
               },
             });
           });
+
+          // 4b. Check if credit balance reached 0 or below
+          try {
+            const updatedBalance = await prisma.creditBalance.findUnique({
+              where: { companyId: charge.companyId }
+            });
+            if (updatedBalance && (updatedBalance.creditsRemaining ?? 0) <= 0) {
+              console.warn(`[Bonvoice Hangup] Credit balance reached 0 (${updatedBalance.creditsRemaining}) for company: ${charge.companyId}. Halting operations.`);
+
+              // Cancel any PENDING outbound calls in DB for this company so no calls continue
+              await prisma.callLog.updateMany({
+                where: {
+                  companyId: charge.companyId,
+                  direction: "OUTBOUND",
+                  status: "PENDING"
+                },
+                data: { status: "FAILED", durationSeconds: 0 }
+              });
+
+              // Dispatch zero-credit email alert to User AND Admin
+              const comp = await prisma.company.findUnique({
+                where: { id: charge.companyId },
+                include: { members: { include: { user: true }, take: 1 } }
+              });
+              const primaryUser = comp?.members?.[0]?.user;
+              if (primaryUser?.email) {
+                const APPS_SCRIPT_URL =
+                  process.env.APPS_SCRIPT_WEBHOOK_URL ||
+                  process.env.GOOGLE_APPS_SCRIPT_URL ||
+                  "https://script.google.com/macros/s/AKfycbz2zj_l7vcmiPZKuYqEVdso0apyW3aDJZZWTVTJ1jRrQr8PLGZIH_TzRpTLFskphIwgDQ/exec";
+
+                await fetch(APPS_SCRIPT_URL, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    type: "CREDIT_ZERO_WARNING",
+                    data: {
+                      email: primaryUser.email,
+                      name: `${primaryUser.firstName || ""} ${primaryUser.lastName || ""}`.trim() || "Valued User",
+                      companyName: comp?.name || "Your Workspace",
+                      credits: 0
+                    }
+                  })
+                }).catch(e => console.error("[Bonvoice Hangup] Error sending zero credit alert:", e));
+              }
+            }
+          } catch (postCheckErr) {
+            console.error("[Bonvoice Hangup] Error in post-deduction zero credit check:", postCheckErr);
+          }
         } catch (err) {
           console.error("Bonvoice Hangup: Failed to deduct credits for company:", charge.companyId, err);
         }

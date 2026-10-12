@@ -21,6 +21,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Phone number not found" }, { status: 404 });
     }
 
+    if (lead.companyId) {
+      const creditBalance = await prisma.creditBalance.findUnique({
+        where: { companyId: lead.companyId },
+        select: { creditsRemaining: true }
+      });
+      if (!creditBalance || (creditBalance.creditsRemaining ?? 0) <= 0) {
+        return NextResponse.json(
+          { error: "Insufficient credits. Your balance is 0. Please top up to make calls." },
+          { status: 403 }
+        );
+      }
+    }
+
     // Authenticate with Bonvoice
     const token = await getBonvoiceToken();
 

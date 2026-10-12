@@ -577,7 +577,11 @@ function DashboardShellInner({
           <div className="w-full bg-red-500/10 border-b border-red-500/20 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-red-500 text-sm font-medium z-50">
             <div className="flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-              <span>Warning: Your credit balance is {creditsRemaining === 0 ? "zero" : `extremely low (${creditsRemaining} credits)`}. Please purchase more credits immediately to avoid being blocked from the dashboard.</span>
+              <span>
+                {creditsRemaining <= 0
+                  ? "🚨 Account Locked: Your credit balance is 0. All running campaigns, lead reactivations, and outbound services are paused. Please add credits below to unlock the dashboard."
+                  : `Warning: Your credit balance is low (${creditsRemaining} credits). Please purchase more credits soon to prevent campaign interruptions.`}
+              </span>
             </div>
             {pathname !== "/dashboard/billing" && (
               <button 

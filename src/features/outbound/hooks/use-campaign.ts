@@ -77,6 +77,10 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
       const user = storedUserStr ? JSON.parse(storedUserStr) : {};
       const companyId = overrideCompanyId || user.companyId || null;
 
+      if (user?.creditBalance?.creditsRemaining !== undefined && user.creditBalance.creditsRemaining <= 0) {
+        throw new Error("Cannot start campaign. Your credit balance is 0. Please top up your account.");
+      }
+
       if (!companyId) {
         throw new Error("Company ID not found");
       }
