@@ -144,11 +144,12 @@ export async function GET(req: NextRequest) {
     let currentKey = "";
     const seenPhones = new Set<string>();
 
+    const istFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+
     for (const call of failedCalls) {
       const d = call.startedAt;
 
       // Group by calendar day in IST (UTC+5:30)
-      const istFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
       const key = istFmt.format(d); // "YYYY-MM-DD"
 
       if (key !== currentKey) {
@@ -247,6 +248,8 @@ export async function GET(req: NextRequest) {
 
     const compShort = companyId.replace(/-/g, "").slice(0, 8);
 
+    const todayIstStr = istFmt.format(new Date(nowMs));
+
     // Process Q1, Q2, Q3 stages and rollover
     for (const key of Object.keys(buckets)) {
       const b = buckets[key];
@@ -284,27 +287,35 @@ export async function GET(req: NextRequest) {
         (b.q1.failedLeads.some((fl: any) => fl.id === l.leadId) && matchLegacy(l, "-q3", b.q3Time))
       );
 
+      // Reactivation day is the day following the original failed leads day
+      const reactivationDateStr = istFmt.format(new Date(b.originalDateMs + 24 * 60 * 60 * 1000));
+      const isPastDay = reactivationDateStr < todayIstStr;
+      const q3CutoffTime = new Date(`${reactivationDateStr}T23:45:00+05:30`);
+      const isPastQ3Cutoff = isPastDay || (nowMs >= q3CutoffTime.getTime());
+
       // Determine wave status based on scheduled times and exact cutoff rules:
       // Wave 1: 10:00 AM -> 2:30 PM cutoff. Completed at 2:30 PM.
       // Wave 2: 3:00 PM  -> 7:30 PM cutoff. Completed at 7:30 PM.
-      // Wave 3: 8:00 PM  -> Runs until all calls are done.
-      if (nowMs < b.q1Time.getTime()) {
-        b.q1.status = "Pending";
-      } else if (nowMs >= b.q1CutoffTime.getTime()) {
+      // Wave 3: 8:00 PM  -> 11:45 PM nightly cutoff / day end. Completed if past cutoff or all done.
+      if (isPastDay || nowMs >= b.q1CutoffTime.getTime()) {
         b.q1.status = "Completed";
+      } else if (nowMs < b.q1Time.getTime()) {
+        b.q1.status = "Pending";
       } else {
         b.q1.status = "Running";
       }
 
-      if (nowMs < b.q2Time.getTime()) {
-        b.q2.status = "Pending";
-      } else if (nowMs >= b.q2CutoffTime.getTime()) {
+      if (isPastDay || nowMs >= b.q2CutoffTime.getTime()) {
         b.q2.status = "Completed";
+      } else if (nowMs < b.q2Time.getTime()) {
+        b.q2.status = "Pending";
       } else {
         b.q2.status = "Running";
       }
 
-      if (nowMs < b.q3Time.getTime()) {
+      if (isPastQ3Cutoff) {
+        b.q3.status = "Completed";
+      } else if (nowMs < b.q3Time.getTime()) {
         b.q3.status = "Pending";
       } else {
         b.q3.status = "Running";
@@ -324,16 +335,16 @@ export async function GET(req: NextRequest) {
         let q2Log = leadLogs.find(l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q2")) || leadLogs.find(l => matchLegacy(l, "-q2", b.q2Time));
         let q3Log = leadLogs.find(l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q3")) || leadLogs.find(l => matchLegacy(l, "-q3", b.q3Time));
 
-        if (nowMs < b.q1Time.getTime()) q1Log = undefined;
-        if (nowMs < b.q2Time.getTime()) q2Log = undefined;
-        if (nowMs < b.q3Time.getTime()) q3Log = undefined;
+        if (nowMs < b.q1Time.getTime() && !isPastDay) q1Log = undefined;
+        if (nowMs < b.q2Time.getTime() && !isPastDay) q2Log = undefined;
+        if (nowMs < b.q3Time.getTime() && !isPastDay) q3Log = undefined;
 
         const q1LogStatus = (q1Log?.status || "").toUpperCase();
         const completedInQ1 = q1LogStatus === "COMPLETED" && (q1Log?.durationSeconds || 0) > 0;
-        const isRingingInQ1 = !completedInQ1 && !!q1Log && PENDING_STATUSES.includes(q1LogStatus);
+        const isRingingInQ1 = !completedInQ1 && !isPastDay && !!q1Log && PENDING_STATUSES.includes(q1LogStatus);
 
-        // At or after 2:30 PM cutoff: any lead not completed is marked FAILED for Wave 1
-        const isPastQ1Cutoff = nowMs >= b.q1CutoffTime.getTime();
+        // At or after 2:30 PM cutoff (or past day): any lead not completed is marked FAILED for Wave 1
+        const isPastQ1Cutoff = isPastDay || (nowMs >= b.q1CutoffTime.getTime());
         const failedInQ1 = isPastQ1Cutoff
           ? !completedInQ1
           : (!completedInQ1 && !isRingingInQ1 && !!q1Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q1LogStatus));
@@ -344,7 +355,7 @@ export async function GET(req: NextRequest) {
           isFailed: failedInQ1,
           isRinging: isRingingInQ1,
           isAttempted: !!q1Log,
-          status: q1Log?.status,
+          status: isPastQ1Cutoff && !completedInQ1 ? "FAILED" : q1Log?.status,
         };
         q1FinalList.push(leadQ1Data);
 
@@ -352,10 +363,10 @@ export async function GET(req: NextRequest) {
         if (failedInQ1 || (b.q1.status === "Completed" && !completedInQ1)) {
           const q2LogStatus = (q2Log?.status || "").toUpperCase();
           const completedInQ2 = q2LogStatus === "COMPLETED" && (q2Log?.durationSeconds || 0) > 0;
-          const isRingingInQ2 = !completedInQ2 && !!q2Log && PENDING_STATUSES.includes(q2LogStatus);
+          const isRingingInQ2 = !completedInQ2 && !isPastDay && !!q2Log && PENDING_STATUSES.includes(q2LogStatus);
 
-          // At or after 7:30 PM cutoff: any lead not completed is marked FAILED for Wave 2
-          const isPastQ2Cutoff = nowMs >= b.q2CutoffTime.getTime();
+          // At or after 7:30 PM cutoff (or past day): any lead not completed is marked FAILED for Wave 2
+          const isPastQ2Cutoff = isPastDay || (nowMs >= b.q2CutoffTime.getTime());
           const failedInQ2 = isPastQ2Cutoff
             ? !completedInQ2
             : (!completedInQ2 && !isRingingInQ2 && !!q2Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q2LogStatus));
@@ -366,7 +377,7 @@ export async function GET(req: NextRequest) {
             isFailed: failedInQ2,
             isRinging: isRingingInQ2,
             isAttempted: !!q2Log,
-            status: q2Log?.status,
+            status: isPastQ2Cutoff && !completedInQ2 ? "FAILED" : q2Log?.status,
           };
           q2FinalList.push(leadQ2Data);
 
@@ -374,8 +385,10 @@ export async function GET(req: NextRequest) {
           if (failedInQ2 || (b.q2.status === "Completed" && !completedInQ2)) {
             const q3LogStatus = (q3Log?.status || "").toUpperCase();
             const completedInQ3 = q3LogStatus === "COMPLETED" && (q3Log?.durationSeconds || 0) > 0;
-            const isRingingInQ3 = !completedInQ3 && !!q3Log && PENDING_STATUSES.includes(q3LogStatus);
-            const failedInQ3 = !completedInQ3 && !isRingingInQ3 && !!q3Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus);
+            const isRingingInQ3 = !completedInQ3 && !isPastQ3Cutoff && !!q3Log && PENDING_STATUSES.includes(q3LogStatus);
+            const failedInQ3 = isPastQ3Cutoff
+              ? !completedInQ3
+              : (!completedInQ3 && !isRingingInQ3 && !!q3Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus));
 
             const leadQ3Data = {
               ...lead,
@@ -383,7 +396,7 @@ export async function GET(req: NextRequest) {
               isFailed: failedInQ3,
               isRinging: isRingingInQ3,
               isAttempted: !!q3Log,
-              status: q3Log?.status,
+              status: isPastQ3Cutoff && !completedInQ3 ? "FAILED" : q3Log?.status,
             };
             q3FinalList.push(leadQ3Data);
           }
@@ -393,7 +406,7 @@ export async function GET(req: NextRequest) {
       // Check if all leads are completed in Wave 3
       if (b.q3.status === "Running" && q3FinalList.length > 0) {
         const allQ3Done = q3FinalList.every(l => l.isCompleted || l.isFailed);
-        if (allQ3Done) {
+        if (allQ3Done || isPastQ3Cutoff) {
           b.q3.status = "Completed";
         }
       }
@@ -428,16 +441,18 @@ export async function GET(req: NextRequest) {
       }
 
       // Overall status
-      b.overallStatus =
-        b.q3.status === "Completed"
-          ? "Completed"
-          : b.q1.status === "Running" || b.q2.status === "Running" || b.q3.status === "Running"
+      if (b.q3.status === "Completed") {
+        b.overallStatus = "Completed";
+      } else {
+        b.overallStatus =
+          b.q1.status === "Running" || b.q2.status === "Running" || b.q3.status === "Running"
             ? "Running"
             : b.q1.status === "Pending"
               ? "Pending Q1"
               : b.q2.status === "Pending"
                 ? "Pending Q2"
                 : "Pending Q3";
+      }
     }
 
     const data = Object.values(buckets).sort((a: any, b: any) => b.originalDateMs - a.originalDateMs);

@@ -204,7 +204,21 @@ export function CampaignCard({
         const cached = localStorage.getItem("cached_reactivation_campaigns");
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+            return parsed.map((item: any) => {
+              if (item.id && item.id < todayStr) {
+                return {
+                  ...item,
+                  q1: { ...item.q1, status: "Completed" },
+                  q2: { ...item.q2, status: "Completed" },
+                  q3: { ...item.q3, status: "Completed" },
+                  overallStatus: "Completed"
+                };
+              }
+              return item;
+            });
+          }
         }
       } catch (e) {}
     }
@@ -1267,10 +1281,12 @@ export function CampaignCard({
                                       <span className="text-red-500">Failed</span>
                                       <span className="bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full font-bold">{failed}</span>
                                     </span>
-                                    <span className="flex items-center gap-1">
-                                      <span className="text-amber-500">Pending</span>
-                                      <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
-                                    </span>
+                                    {wave.data.status !== "Completed" && (
+                                      <span className="flex items-center gap-1">
+                                        <span className="text-amber-500">Pending</span>
+                                        <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
+                                      </span>
+                                    )}
                                   </div>
                                 );
                               })()}
