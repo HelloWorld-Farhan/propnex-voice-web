@@ -599,7 +599,10 @@ export function CampaignCard({
                       All Numbers
                     </Button>
                   </DialogTrigger>
-                  <DialogContent className="max-w-4xl w-[90vw] h-[80vh] flex flex-col overflow-hidden bg-background/95 backdrop-blur-xl border-primary/20 p-0 shadow-2xl z-50">
+                  <DialogContent 
+                    onOpenAutoFocus={(e) => e.preventDefault()}
+                    className="max-w-4xl w-[90vw] h-[80vh] flex flex-col overflow-hidden bg-background/95 backdrop-blur-xl border-primary/20 p-0 shadow-2xl z-50"
+                  >
                     <DialogHeader className="p-6 pb-4 border-b border-border/50 bg-muted/10 shrink-0">
                       <div className="flex items-center justify-between gap-4">
                         <DialogTitle className="text-xl flex items-center gap-2 font-semibold">
