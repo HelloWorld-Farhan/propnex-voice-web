@@ -6,9 +6,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// High-performance in-memory cache with 10-second TTL
+// High-performance in-memory cache with 1.5-second TTL for instant realtime accuracy
 const dashboardCache = new Map<string, { data: any; expiry: number }>();
-const CACHE_TTL_MS = 10000;
+const CACHE_TTL_MS = 1500;
 
 export async function GET(req: NextRequest) {
   try {

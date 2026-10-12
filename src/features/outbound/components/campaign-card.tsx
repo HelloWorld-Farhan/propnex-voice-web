@@ -323,11 +323,12 @@ export function CampaignCard({
       // Fetch dashboard without triggering loading state UI changes
       fetchDashboard();
 
-      // Poll every 10s for real-time updates as missed/0-sec calls happen in other campaigns
-      const interval = setInterval(fetchDashboard, 10000);
+      // Realtime polling: 2s when modal is open or any wave is running, 10s otherwise
+      const pollMs = leadsModalOpen ? 2000 : 10000;
+      const interval = setInterval(fetchDashboard, pollMs);
       return () => clearInterval(interval);
     }
-  }, [isReactivationCard]);
+  }, [isReactivationCard, leadsModalOpen]);
 
   const todayStr = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date()).replace("Sept", "Sep");
   const todayBucket = historicalCampaigns.find(h => h.date === todayStr || h.date === todayStr.replace("Sep", "Sept"));
@@ -1099,9 +1100,9 @@ export function CampaignCard({
 
                             const statusText = hist.q3?.status === "Completed" 
                               ? "Completed" 
-                              : hist.q1?.status === "Running" ? `Running ${getProcessedCount(hist.q1)} / ${getTotalCount(hist.q1)} Q1` 
-                              : hist.q2?.status === "Running" ? `Running ${getProcessedCount(hist.q2)} / ${getTotalCount(hist.q2)} Q2` 
-                              : hist.q3?.status === "Running" ? `Running ${getProcessedCount(hist.q3)} / ${getTotalCount(hist.q3)} Q3` 
+                              : hist.q1?.status === "Running" ? `Running - ${getProcessedCount(hist.q1)} / ${getTotalCount(hist.q1)} Q1` 
+                              : hist.q2?.status === "Running" ? `Running - ${getProcessedCount(hist.q2)} / ${getTotalCount(hist.q2)} Q2` 
+                              : hist.q3?.status === "Running" ? `Running - ${getProcessedCount(hist.q3)} / ${getTotalCount(hist.q3)} Q3` 
                               : hist.q1?.status === "Pending" || hist.q1?.status === "Scheduled" ? `${hist.q1.status} Q1` 
                               : hist.q2?.status === "Pending" || hist.q2?.status === "Scheduled" ? `${hist.q2.status} Q2` 
                               : `${hist.q3?.status || "Pending"} Q3`;
@@ -1261,15 +1262,35 @@ export function CampaignCard({
                                   )}
                                 >
                                   {wave.data.status === "Running" 
-                                    ? `Running ${processedCount} / ${totalCount}` 
+                                    ? `Running - ${processedCount} / ${totalCount}` 
                                     : wave.data.status}
                                 </Badge>
                               </div>
                               {(() => {
                                 const total = filteredLeads.length;
+                                const isPendingWave = wave.data.status === "Pending" || wave.data.status === "Scheduled";
+                                const isCompletedWave = wave.data.status === "Completed";
                                 const succeeded = filteredLeads.filter((l: any) => l.isCompleted).length;
-                                const failed = wave.data.status === "Completed" ? total - succeeded : filteredLeads.filter((l: any) => l.isFailed).length;
+                                const failed = isCompletedWave
+                                  ? Math.max(0, total - succeeded)
+                                  : filteredLeads.filter((l: any) => l.isFailed).length;
                                 const pending = Math.max(0, total - succeeded - failed);
+
+                                if (isPendingWave) {
+                                  return (
+                                    <div className="flex items-center gap-3 text-xs font-medium flex-wrap">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className="text-muted-foreground">Total Leads</span>
+                                        <span className="bg-muted text-foreground px-2.5 py-0.5 rounded-full font-bold">{total}</span>
+                                      </span>
+                                      <span className="flex items-center gap-1.5">
+                                        <span className="text-amber-500">Pending</span>
+                                        <span className="bg-amber-500/15 text-amber-500 px-2.5 py-0.5 rounded-full font-bold">{total}</span>
+                                      </span>
+                                    </div>
+                                  );
+                                }
+
                                 return (
                                   <div className="flex items-center justify-between gap-1.5 text-xs font-medium flex-wrap">
                                     <span className="flex items-center gap-1">
@@ -1284,12 +1305,6 @@ export function CampaignCard({
                                       <span className="text-red-500">Failed</span>
                                       <span className="bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full font-bold">{failed}</span>
                                     </span>
-                                    {wave.data.status !== "Completed" && (
-                                      <span className="flex items-center gap-1">
-                                        <span className="text-amber-500">Pending</span>
-                                        <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
-                                      </span>
-                                    )}
                                   </div>
                                 );
                               })()}
