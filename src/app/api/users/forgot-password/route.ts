@@ -6,6 +6,37 @@ const APPS_SCRIPT_URL =
   process.env.GOOGLE_APPS_SCRIPT_URL ||
   "https://script.google.com/macros/s/AKfycbz2zj_l7vcmiPZKuYqEVdso0apyW3aDJZZWTVTJ1jRrQr8PLGZIH_TzRpTLFskphIwgDQ/exec";
 
+interface RateBucket {
+  timestamps: number[];
+}
+const forgotIpBuckets = new Map<string, RateBucket>();
+const forgotEmailBuckets = new Map<string, RateBucket>();
+const MAX_FORGOT_ATTEMPTS_PER_MIN = 5;
+const FORGOT_RATE_WINDOW_MS = 60 * 1000;
+
+function checkForgotRateLimit(key: string, map: Map<string, RateBucket>): boolean {
+  let bucket = map.get(key);
+  if (!bucket) {
+    bucket = { timestamps: [] };
+    map.set(key, bucket);
+  }
+  const cutoff = Date.now() - FORGOT_RATE_WINDOW_MS;
+  bucket.timestamps = bucket.timestamps.filter((ts) => ts > cutoff);
+  if (bucket.timestamps.length >= MAX_FORGOT_ATTEMPTS_PER_MIN) {
+    return true;
+  }
+  bucket.timestamps.push(Date.now());
+  return false;
+}
+
+function getIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+  return "127.0.0.1";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { email, domainUrl } = await req.json();
@@ -15,6 +46,14 @@ export async function POST(req: NextRequest) {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
+    const clientIp = getIp(req);
+
+    if (checkForgotRateLimit(clientIp, forgotIpBuckets) || checkForgotRateLimit(normalizedEmail, forgotEmailBuckets)) {
+      return NextResponse.json(
+        { message: "Too many password reset requests. Please wait 1 minute before trying again." },
+        { status: 429 }
+      );
+    }
 
     const user = await prisma.user.findUnique({
       where: { email: normalizedEmail },

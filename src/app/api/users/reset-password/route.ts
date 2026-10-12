@@ -47,7 +47,10 @@ export async function POST(req: NextRequest) {
     if (user.passwordHash) {
       const isSamePassword = await bcrypt.compare(newPassword, user.passwordHash);
       if (isSamePassword) {
-        return NextResponse.json({ message: "Password is the same as the previous one and cannot be used" }, { status: 400 });
+        return NextResponse.json(
+          { message: "New password cannot be the same as your previous password. Please choose a different password for security." },
+          { status: 400 }
+        );
       }
     }
 
@@ -59,6 +62,9 @@ export async function POST(req: NextRequest) {
         passwordHash,
         resetPasswordOtp: null,
         resetPasswordExpires: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        requirePasswordReset: false,
       },
     });
 

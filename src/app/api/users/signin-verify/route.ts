@@ -40,10 +40,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "Your account has been suspended. Please contact support." }, { status: 403 });
     }
 
-    // Clear OTP
+    if (user.requirePasswordReset) {
+      return NextResponse.json({
+        message: "Your account is locked due to consecutive failed login attempts. Please reset your password to proceed.",
+        requireOtpReset: true
+      }, { status: 423 });
+    }
+
+    // Clear OTP and reset security counters
     await prisma.user.update({
       where: { id: user.id },
-      data: { resetPasswordOtp: null, resetPasswordExpires: null }
+      data: {
+        resetPasswordOtp: null,
+        resetPasswordExpires: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        requirePasswordReset: false,
+      }
     });
 
     let companyId: string | null = null;

@@ -15,6 +15,7 @@ export function SignInPageContent() {
   const [rememberMe, setRememberMe] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [isLockedOut, setIsLockedOut] = useState(false);
 
   const [emailValue, setEmailValue] = useState("");
   const [trustedEmails, setTrustedEmails] = useState<string[]>([]);
@@ -98,6 +99,9 @@ export function SignInPageContent() {
         ? (Array.isArray(responseData.message) ? responseData.message.join(", ") : responseData.message)
         : (err.message || "Invalid email or password");
       setErrors({ root: errorMsg });
+      if (responseData?.requireOtpReset || responseData?.locked || err.response?.status === 423) {
+        setIsLockedOut(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -131,20 +135,58 @@ export function SignInPageContent() {
         />
 
         {!isCurrentEmailTrusted && (
-          <div className="flex flex-col gap-1">
-            <label className="flex items-center gap-2 text-sm text-white/80">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => !submitting && setRememberMe(!rememberMe)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                if (!submitting) setRememberMe(!rememberMe);
+              }
+            }}
+            className={`group relative flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-all duration-200 select-none ${
+              rememberMe
+                ? "border-fuchsia-500/60 bg-fuchsia-500/[0.07] shadow-[0_0_15px_rgba(217,70,239,0.12)]"
+                : "border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]"
+            }`}
+          >
+            <div className="relative flex items-center pt-0.5">
               <input
                 type="checkbox"
+                id="rememberMe"
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
-                className="size-4 rounded border-white/60 accent-fuchsia-500"
                 disabled={submitting}
+                className="sr-only"
               />
-              Remember me
-            </label>
-            <span className="text-[10px] text-white/40 ml-6">
-              Save this device to skip OTP verification for future logins.
-            </span>
+              <div
+                className={`flex size-4.5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                  rememberMe
+                    ? "border-fuchsia-500 bg-gradient-to-tr from-fuchsia-600 to-purple-600 text-white shadow-sm"
+                    : "border-white/30 bg-black/40 group-hover:border-fuchsia-400/60"
+                }`}
+              >
+                {rememberMe && (
+                  <svg
+                    className="size-3 stroke-[3]"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs font-semibold text-white/90">
+                Remember this device
+              </span>
+              <span className="text-[11px] text-white/50 leading-relaxed">
+                Save this device to skip OTP verification for future logins.
+              </span>
+            </div>
           </div>
         )}
 
@@ -155,11 +197,35 @@ export function SignInPageContent() {
           </div>
         )}
 
-        {errors.root && (
-          <p className="text-center text-xs text-red-400">{errors.root}</p>
-        )}
+        {isLockedOut ? (
+          <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3.5 text-left space-y-2">
+            <div className="flex items-center gap-2 text-rose-300 font-semibold text-xs">
+              <svg className="size-4 shrink-0 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>Account Locked (5 Failed Attempts)</span>
+            </div>
+            <p className="text-[11px] text-white/75 leading-relaxed">
+              To protect your account from unauthorized password guessing, normal login is disabled. A verification OTP has been sent to your email.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.setItem("reset_email", emailValue);
+                router.push(`${AUTH_ROUTES.verifyOtp}?purpose=password-reset`);
+              }}
+              className="w-full mt-1 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
+            >
+              Verify OTP & Reset Password &rarr;
+            </button>
+          </div>
+        ) : errors.root ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs text-red-400">
+            {errors.root}
+          </div>
+        ) : null}
 
-        <button type="submit" disabled={submitting} className="auth-btn-primary disabled:opacity-50">
+        <button type="submit" disabled={submitting || isLockedOut} className="auth-btn-primary disabled:opacity-50">
           {submitting ? "Logging in..." : "Login"}
         </button>
       </form>

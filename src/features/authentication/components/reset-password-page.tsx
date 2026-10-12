@@ -257,17 +257,63 @@ export function ResetPasswordPageContent() {
           error={emailError}
         />
 
-        <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm text-white/80">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => !loading && setConfirmChange(!confirmChange)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              if (!loading) setConfirmChange(!confirmChange);
+            }
+          }}
+          className={`group relative flex cursor-pointer items-start gap-3.5 rounded-xl border p-3.5 transition-all duration-200 select-none ${
+            confirmChange
+              ? "border-fuchsia-500/70 bg-fuchsia-500/[0.08] shadow-[0_0_20px_rgba(217,70,239,0.14)]"
+              : "border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]"
+          }`}
+        >
+          <div className="relative flex items-center pt-0.5">
             <input
               type="checkbox"
+              id="confirmChange"
               checked={confirmChange}
               onChange={(e) => setConfirmChange(e.target.checked)}
-              className="size-4 rounded border-white/60 accent-fuchsia-500"
               disabled={loading}
+              className="sr-only"
             />
-            I want to change my password
-          </label>
+            <div
+              className={`flex size-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                confirmChange
+                  ? "border-fuchsia-500 bg-gradient-to-tr from-fuchsia-600 to-purple-600 text-white shadow-sm"
+                  : "border-white/30 bg-black/40 group-hover:border-fuchsia-400/60"
+              }`}
+            >
+              {confirmChange && (
+                <svg
+                  className="size-3.5 stroke-[3]"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-white/95 tracking-wide">
+                I want to change my password
+              </span>
+              <span className="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-[10px] font-medium text-fuchsia-300">
+                Security
+              </span>
+            </div>
+            <p className="text-xs text-white/55 leading-relaxed">
+              Confirm that you are authorizing a one-time verification OTP to be sent to this email address to reset your account password.
+            </p>
+          </div>
         </div>
 
         {message && (
