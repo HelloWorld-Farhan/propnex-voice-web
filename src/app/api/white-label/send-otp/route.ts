@@ -13,12 +13,11 @@ export async function POST(req: Request) {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     // Send it to GAS Webhook
-    const webhookUrl = process.env.GAS_WEBHOOK_URL || process.env.APPS_SCRIPT_WEBHOOK_URL;
-    
-    if (!webhookUrl) {
-      console.error("GAS_WEBHOOK_URL is missing from environment variables.");
-      return NextResponse.json({ error: "Server Configuration Error: GAS_WEBHOOK_URL is missing." }, { status: 500 });
-    }
+    const webhookUrl =
+      process.env.GAS_WEBHOOK_URL ||
+      process.env.APPS_SCRIPT_WEBHOOK_URL ||
+      process.env.GOOGLE_APPS_SCRIPT_URL ||
+      "https://script.google.com/macros/s/AKfycbz2zj_l7vcmiPZKuYqEVdso0apyW3aDJZZWTVTJ1jRrQr8PLGZIH_TzRpTLFskphIwgDQ/exec";
 
     try {
       const response = await fetch(webhookUrl, {

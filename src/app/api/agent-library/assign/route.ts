@@ -50,7 +50,11 @@ export async function POST(req: NextRequest) {
     });
 
     // Trigger webhook for email notifications
-    const webhookUrl = process.env.APPS_SCRIPT_WEBHOOK_URL;
+    const webhookUrl =
+      process.env.APPS_SCRIPT_WEBHOOK_URL ||
+      process.env.GOOGLE_APPS_SCRIPT_URL ||
+      process.env.GAS_WEBHOOK_URL ||
+      "https://script.google.com/macros/s/AKfycbz2zj_l7vcmiPZKuYqEVdso0apyW3aDJZZWTVTJ1jRrQr8PLGZIH_TzRpTLFskphIwgDQ/exec";
     if (webhookUrl) {
       const typeAdmin = assign ? "agent_assigned_admin" : "agent_revoked_admin";
       const typeUser = assign ? "agent_assigned_user" : "agent_revoked_user";

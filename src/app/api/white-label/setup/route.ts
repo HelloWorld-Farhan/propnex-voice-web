@@ -87,7 +87,11 @@ export async function POST(req: Request) {
       console.error("Failed to log system event", e);
     }
 
-    const webhookUrl = process.env.GAS_WEBHOOK_URL || process.env.APPS_SCRIPT_WEBHOOK_URL;
+    const webhookUrl =
+      process.env.GAS_WEBHOOK_URL ||
+      process.env.APPS_SCRIPT_WEBHOOK_URL ||
+      process.env.GOOGLE_APPS_SCRIPT_URL ||
+      "https://script.google.com/macros/s/AKfycbz2zj_l7vcmiPZKuYqEVdso0apyW3aDJZZWTVTJ1jRrQr8PLGZIH_TzRpTLFskphIwgDQ/exec";
     if (webhookUrl) {
       try {
         await fetch(webhookUrl, {
