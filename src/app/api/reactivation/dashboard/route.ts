@@ -6,13 +6,17 @@ const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// High-performance in-memory cache with 10-second TTL
+const dashboardCache = new Map<string, { data: any; expiry: number }>();
+const CACHE_TTL_MS = 10000;
+
 export async function GET(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    
+
     const token = authHeader.split(" ")[1];
     const decoded: any = jwt.verify(token, JWT_SECRET);
     const userId = decoded.sub || decoded.id;
@@ -27,16 +31,23 @@ export async function GET(req: NextRequest) {
 
     const companyId = member.companyId;
 
+    // Check memory cache for instant sub-millisecond response
+    const cached = dashboardCache.get(companyId);
+    const nowMs = Date.now();
+    if (cached && cached.expiry > nowMs) {
+      return NextResponse.json({ data: cached.data });
+    }
+
     const subCompanies = await prisma.company.findMany({
       where: { parentCompanyId: companyId },
       select: { id: true }
     });
     const companyIdsToQuery = [companyId, ...subCompanies.map((c: any) => c.id)];
 
-    // Fetch a dynamic fallback number for pending calls - MUST be OUTBOUND or BOTH direction, never inbound
+    // Fetch dynamic fallback number for pending calls
     const activeFallbackPhone = await prisma.phoneNumber.findFirst({
       where: {
-        companyId: companyId, // strictly main company only
+        companyId: companyId,
         direction: { in: ["OUTBOUND", "BOTH"] },
         status: "ACTIVE",
       },
@@ -45,17 +56,7 @@ export async function GET(req: NextRequest) {
     const fallbackNumber = activeFallbackPhone?.number || "Unknown";
     const fallbackChannels = activeFallbackPhone?.channels || 1;
 
-    // Build a Set of currently-active outbound number strings for quick lookup
-    const activeOutboundNumbers = new Set<string>();
-    if (activeFallbackPhone?.number) activeOutboundNumbers.add(activeFallbackPhone.number);
-    const allActiveOutboundPhones = await prisma.phoneNumber.findMany({
-      where: { companyId: companyId, direction: { in: ["OUTBOUND", "BOTH"] }, status: "ACTIVE" },
-      select: { number: true }
-    });
-    allActiveOutboundPhones.forEach((p: any) => activeOutboundNumbers.add(p.number));
-
-    // Fetch all initial FAILED/MISSED calls to find the base "Failed Leads" pool
-    // We only want original outbound calls, NOT reactivation calls
+    // Fetch original failed/missed outbound calls (LEAN PROJECTION for blazing speed)
     const failedCalls = await prisma.callLog.findMany({
       where: {
         companyId: { in: companyIdsToQuery },
@@ -71,17 +72,36 @@ export async function GET(req: NextRequest) {
           ]
         }
       },
-      include: {
-        lead: true,
-        phoneNumber: true,
+      select: {
+        id: true,
+        startedAt: true,
+        leadId: true,
+        campaignId: true,
+        correlationId: true,
+        status: true,
+        durationSeconds: true,
+        lead: {
+          select: {
+            id: true,
+            phone: true,
+            firstName: true,
+            lastName: true,
+            customFields: true,
+          }
+        },
+        phoneNumber: {
+          select: {
+            number: true,
+            channels: true,
+          }
+        }
       },
       orderBy: {
         startedAt: "asc"
       }
     });
 
-    // Also fetch all reactivation CallLogs to track Q1/Q2/Q3 progress
-    // We need these to know if a lead successfully answered during Q1, Q2, or Q3
+    // Fetch reactivation CallLogs to track Q1/Q2/Q3 progress
     const reactivationLogs = await prisma.callLog.findMany({
       where: {
         companyId: { in: companyIdsToQuery },
@@ -89,6 +109,7 @@ export async function GET(req: NextRequest) {
         correlationId: { startsWith: "reactivation-" }
       },
       select: {
+        id: true,
         leadId: true,
         status: true,
         correlationId: true,
@@ -100,12 +121,24 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    const activeCampaignIds = new Set<string>();
-    reactivationLogs.forEach(log => {
-      if (log.status === "PENDING" || log.status === "RINGING") {
-        if (log.correlationId) activeCampaignIds.add(log.correlationId);
+    // Build fast lookup Map for reactivation logs by phone and leadId
+    const reactivationLogsByPhone = new Map<string, any[]>();
+    const reactivationLogsByLeadId = new Map<string, any[]>();
+    for (const log of reactivationLogs) {
+      if (log.lead?.phone) {
+        const phone = log.lead.phone;
+        const list = reactivationLogsByPhone.get(phone) || [];
+        list.push(log);
+        reactivationLogsByPhone.set(phone, list);
       }
-    });
+      if (log.leadId) {
+        const list = reactivationLogsByLeadId.get(log.leadId) || [];
+        list.push(log);
+        reactivationLogsByLeadId.set(log.leadId, list);
+      }
+    }
+
+    const PENDING_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
 
     const buckets: Record<string, any> = {};
     let currentKey = "";
@@ -113,76 +146,55 @@ export async function GET(req: NextRequest) {
 
     for (const call of failedCalls) {
       const d = call.startedAt;
-      
-      // Group by the actual calendar day in India (IST)
+
+      // Group by calendar day in IST (UTC+5:30)
       const istFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
       const key = istFmt.format(d); // "YYYY-MM-DD"
-      
-      // Per-day deduplication: Reset seenPhones when we enter a new day
+
       if (key !== currentKey) {
         currentKey = key;
         seenPhones.clear();
       }
 
-      let fallbackCustomerNumber = "";
-      if (call.providerWebhook && typeof call.providerWebhook === 'object') {
-         const wh: any = call.providerWebhook;
-         fallbackCustomerNumber =
-           wh.DestinationNumber || wh.destination_number || wh.destinationNumber ||
-           wh.caller || wh.to_number || wh.to ||
-           wh.customer_number || wh.customerNumber || "";
-         
-         const callIdRaw = wh.callID || wh.callId || wh.call_id || wh.uuid;
-         if (!fallbackCustomerNumber && callIdRaw && typeof callIdRaw === 'string') {
-           const parts = callIdRaw.split('-');
-           if (parts.length >= 3) fallbackCustomerNumber = parts[2];
-         }
-      }
-      if (!fallbackCustomerNumber && call.providerRequest && typeof call.providerRequest === 'object') {
-         const req: any = call.providerRequest;
-         fallbackCustomerNumber = req.to || req.to_number || req.DestinationNumber || req.customerNumber || "";
-      }
-      if (!fallbackCustomerNumber && call.providerResponse && typeof call.providerResponse === 'object') {
-         const res: any = call.providerResponse;
-         fallbackCustomerNumber = res.to || res.to_number || res.DestinationNumber || res.customerNumber || "";
-      }
+      const leadPhone = call.lead?.phone;
+      if (!leadPhone) continue;
 
-      const leadPhone = call.lead?.phone || fallbackCustomerNumber;
-      if (!leadPhone) continue; // Skip if no phone number available
-      
-      // Deduplication per day: only add a number to the reactivation pipeline once per day
+      // Deduplicate phone per day
       if (seenPhones.has(leadPhone)) continue;
       seenPhones.add(leadPhone);
-      
+
       if (!buckets[key]) {
-        // Calculate the NEXT calendar day in IST
         const nextDayMs = d.getTime() + 24 * 60 * 60 * 1000;
         const shortFmtOptions: Intl.DateTimeFormatOptions = { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" };
-        const shortFmt = new Intl.DateTimeFormat("en-GB", shortFmtOptions).format(d); // e.g. "12 Sep"
-        const nextShortFmt = new Intl.DateTimeFormat("en-GB", shortFmtOptions).format(new Date(nextDayMs)); // e.g. "13 Sep"
-        
-        // Build Q1, Q2, Q3 schedule times in IST (UTC+5:30)
-        // Extract the next day's date components in IST
+        const shortFmt = new Intl.DateTimeFormat("en-GB", shortFmtOptions).format(d);
+        const nextShortFmt = new Intl.DateTimeFormat("en-GB", shortFmtOptions).format(new Date(nextDayMs));
+
         const nextDayStr = istFmt.format(new Date(nextDayMs)); // "YYYY-MM-DD"
-        
+
+        // Exact wave scheduled times and cutoffs in IST:
+        // Wave 1: 10:00 AM -> 2:30 PM cutoff (stops at 2:30 PM, 30 min calculation window)
+        // Wave 2: 3:00 PM  -> 7:30 PM cutoff (stops at 7:30 PM, 30 min calculation window)
+        // Wave 3: 8:00 PM  -> No stop / runs until done
         const q1Time = new Date(`${nextDayStr}T10:00:00+05:30`);
+        const q1CutoffTime = new Date(`${nextDayStr}T14:30:00+05:30`);
         const q2Time = new Date(`${nextDayStr}T15:00:00+05:30`);
+        const q2CutoffTime = new Date(`${nextDayStr}T19:30:00+05:30`);
         const q3Time = new Date(`${nextDayStr}T20:00:00+05:30`);
 
-          // If the original number still exists in DB (phoneNumber relation not null), use it.
-          // If it was deleted by admin (phoneNumber is null), show current active outbound number for pending waves.
-          const numStillActive = call.phoneNumber !== null;
-          const didToShow   = numStillActive ? (call.phoneNumber!.number) : fallbackNumber;
-          const chToShow    = numStillActive ? (call.phoneNumber!.channels || fallbackChannels) : fallbackChannels;
+        const numStillActive = call.phoneNumber !== null;
+        const didToShow = numStillActive ? call.phoneNumber!.number : fallbackNumber;
+        const chToShow = numStillActive ? (call.phoneNumber!.channels || fallbackChannels) : fallbackChannels;
 
         buckets[key] = {
           id: key,
           csvName: `${shortFmt} Failed Leads`,
           didNumber: didToShow,
           channels: chToShow,
-          date: shortFmt, // E.g. "12 Sep"
+          date: shortFmt,
           originalDateMs: d.getTime(),
-          q1Time, q2Time, q3Time,
+          q1Time, q1CutoffTime,
+          q2Time, q2CutoffTime,
+          q3Time,
           q1: { label: "Wave 1", scheduled: `${nextShortFmt} 10 Am`, status: "Pending", failedLeads: [] },
           q2: { label: "Wave 2", scheduled: `${nextShortFmt} 3 Pm`, status: "Pending", failedLeads: [] },
           q3: { label: "Wave 3", scheduled: `${nextShortFmt} 8 Pm`, status: "Pending", failedLeads: [] },
@@ -190,29 +202,23 @@ export async function GET(req: NextRequest) {
       } else {
         const currentDid = call.phoneNumber?.number;
         if (currentDid && buckets[key].didNumber !== currentDid) {
-          // Both numbers still active but different — mark as multiple
           buckets[key].didNumber = "Multiple Numbers";
-        } else if (!call.phoneNumber && buckets[key].didNumber !== fallbackNumber) {
-          // Original number was deleted — pending wave should show current active outbound
-          buckets[key].didNumber = fallbackNumber;
-          buckets[key].channels  = fallbackChannels;
         }
       }
-      
+
       const leadId = call.leadId || `manual-${leadPhone}`;
       if (!buckets[key].q1.failedLeads.find((l: any) => l.phone === leadPhone)) {
-        
         let leadName = "Unknown";
         if (call.lead) {
           if (call.lead.firstName || call.lead.lastName) {
-             leadName = `${call.lead.firstName || ""} ${call.lead.lastName || ""}`.trim();
+            leadName = `${call.lead.firstName || ""} ${call.lead.lastName || ""}`.trim();
           } else if ((call.lead as any).name) {
-             leadName = (call.lead as any).name;
+            leadName = (call.lead as any).name;
           } else if (call.lead.customFields) {
-             try {
-               const custom = typeof call.lead.customFields === 'string' ? JSON.parse(call.lead.customFields) : call.lead.customFields;
-               if (custom.Name || custom.name) leadName = custom.Name || custom.name;
-             } catch(e) {}
+            try {
+              const custom = typeof call.lead.customFields === 'string' ? JSON.parse(call.lead.customFields) : call.lead.customFields;
+              if (custom.Name || custom.name) leadName = custom.Name || custom.name;
+            } catch (e) { }
           }
         }
 
@@ -220,37 +226,41 @@ export async function GET(req: NextRequest) {
           call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))
             ? "Campaign"
             : call.leadId && !call.campaignId && !call.correlationId
-            ? "Lead"
-            : "Internal";
+              ? "Lead"
+              : "Internal";
 
         const numStillActive2 = call.phoneNumber !== null;
-        const didToShow2  = numStillActive2 ? (call.phoneNumber!.number) : fallbackNumber;
-        const chToShow2   = numStillActive2 ? (call.phoneNumber!.channels || fallbackChannels) : fallbackChannels;
+        const didToShow2 = numStillActive2 ? call.phoneNumber!.number : fallbackNumber;
+        const chToShow2 = numStillActive2 ? (call.phoneNumber!.channels || fallbackChannels) : fallbackChannels;
 
         buckets[key].q1.failedLeads.push({
-           id: leadId,
-           name: leadName,
-           phone: leadPhone,
-           didNumber: didToShow2,
-           channels: chToShow2,
-           isCompleted: false,
-           originalCallType
+          id: leadId,
+          name: leadName,
+          phone: leadPhone,
+          didNumber: didToShow2,
+          channels: chToShow2,
+          isCompleted: false,
+          originalCallType
         });
       }
     }
 
-    const PENDING_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+    const compShort = companyId.replace(/-/g, "").slice(0, 8);
 
-    // Now refine the lists based on actual Reactivation Q1/Q2/Q3 performance
+    // Process Q1, Q2, Q3 stages and rollover
     for (const key of Object.keys(buckets)) {
       const b = buckets[key];
-
-      // Build the stable correlationIds that the cron now uses.
-      // Format: reactivation-{YYYY-MM-DD}-{companyId[0..7]}-{didLast6}-q1|q2|q3
-      const compShort = companyId.replace(/-/g, "").slice(0, 8);
       const correlationPrefix = `reactivation-${key}-${compShort}-`;
 
-      // A wave is "Running" if any of its logs are still PENDING/RINGING
+      const matchLegacy = (log: any, suffix: string, expectedTime: Date) => {
+        if (!log.correlationId?.endsWith(suffix)) return false;
+        if (log.correlationId?.match(/reactivation-\d{4}-\d{2}-\d{2}-/)) return false;
+        const logDate = new Date(log.startedAt).toISOString().split('T')[0];
+        const expectedDate = expectedTime.toISOString().split('T')[0];
+        return logDate === expectedDate;
+      };
+
+      // Check if any call is currently ringing/active in each wave
       const q1Running = reactivationLogs.some(
         l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q1") && PENDING_STATUSES.includes(l.status?.toUpperCase() || "")
       );
@@ -261,25 +271,6 @@ export async function GET(req: NextRequest) {
         l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q3") && PENDING_STATUSES.includes(l.status?.toUpperCase() || "")
       );
 
-      // We check for the strict new correlationId, OR a legacy correlationId whose startedAt date matches the scheduled wave date.
-      const matchLegacy = (log: any, suffix: string, expectedTime: Date) => {
-        if (!log.correlationId?.endsWith(suffix)) return false;
-        // If it's the new format, don't use legacy match
-        if (log.correlationId?.match(/reactivation-\d{4}-\d{2}-\d{2}-/)) return false;
-        // For legacy, check if the log started on or after the expected day (ignoring exact hours)
-        const logDate = new Date(log.startedAt).toISOString().split('T')[0];
-        const expectedDate = expectedTime.toISOString().split('T')[0];
-        return logDate === expectedDate;
-      };
-
-      const nowMs = Date.now();
-      // A wave is "missed" if it's more than 4 hours past its scheduled time with no logs
-      const isMissed = (time: Date) => nowMs > time.getTime() + 4 * 60 * 60 * 1000;
-
-      // A wave is "Completed" if:
-      // 1. It has ANY reactivation logs (meaning calls were fired, regardless of success/fail), OR
-      // 2. Its scheduled time is more than 4 hours past (missed window) — treat as done
-      // A wave is still "Pending" only if its scheduled time hasn't arrived yet AND no logs exist yet.
       const hasQ1Attempted = reactivationLogs.some(l =>
         (l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q1")) ||
         (b.q1.failedLeads.some((fl: any) => fl.id === l.leadId) && matchLegacy(l, "-q1", b.q1Time))
@@ -292,113 +283,143 @@ export async function GET(req: NextRequest) {
         (l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q3")) ||
         (b.q1.failedLeads.some((fl: any) => fl.id === l.leadId) && matchLegacy(l, "-q3", b.q3Time))
       );
-      // Aliases for backward compat with per-lead logic below
-      const hasQ1Logs = hasQ1Attempted;
-      const hasQ2Logs = hasQ2Attempted;
-      const hasQ3Logs = hasQ3Attempted;
 
-      // Determine wave status properly:
-      // - Future (time not reached) → Pending
-      // - Running AND within 2h of scheduled time → Running (calls actively in progress)
-      // - Running BUT > 2h past scheduled time → Completed (webhook may have been missed, calls are done)
-      // - Has any logs OR time window missed → Completed
-      // - Time past but no logs yet (within 4h window) → still Pending/Running
+      // Determine wave status based on scheduled times and exact cutoff rules:
+      // Wave 1: 10:00 AM -> 2:30 PM cutoff. Completed at 2:30 PM.
+      // Wave 2: 3:00 PM  -> 7:30 PM cutoff. Completed at 7:30 PM.
+      // Wave 3: 8:00 PM  -> Runs until all calls are done.
+      if (nowMs < b.q1Time.getTime()) {
+        b.q1.status = "Pending";
+      } else if (nowMs >= b.q1CutoffTime.getTime()) {
+        b.q1.status = "Completed";
+      } else {
+        b.q1.status = "Running";
+      }
 
-      // A wave that has been "Running" for more than 2 hours is stale — webhooks were missed
-      // Normal calls complete in seconds-to-minutes, not hours
-      const isStaleRunning = (time: Date) => nowMs > time.getTime() + 30 * 60 * 1000;
-      const isDispatching = (time: Date) => Date.now() >= time.getTime() && Date.now() < time.getTime() + 30 * 60 * 1000;
+      if (nowMs < b.q2Time.getTime()) {
+        b.q2.status = "Pending";
+      } else if (nowMs >= b.q2CutoffTime.getTime()) {
+        b.q2.status = "Completed";
+      } else {
+        b.q2.status = "Running";
+      }
 
-      b.q1.status = Date.now() < b.q1Time.getTime()
-        ? "Pending"
-        : ((q1Running && !isStaleRunning(b.q1Time)) ? "Running" : ((hasQ1Attempted || isMissed(b.q1Time)) ? "Completed" : "Pending"));
-      b.q2.status = Date.now() < b.q2Time.getTime()
-        ? "Pending"
-        : ((q2Running && !isStaleRunning(b.q2Time)) ? "Running" : ((hasQ2Attempted || isMissed(b.q2Time)) ? "Completed" : "Pending"));
-      b.q3.status = Date.now() < b.q3Time.getTime()
-        ? "Pending"
-        : ((q3Running && !isStaleRunning(b.q3Time)) ? "Running" : ((hasQ3Attempted || isMissed(b.q3Time)) ? "Completed" : "Pending"));
+      if (nowMs < b.q3Time.getTime()) {
+        b.q3.status = "Pending";
+      } else {
+        b.q3.status = "Running";
+      }
 
-      // Build per-lead outcome lists for each wave
       const q1FinalList: any[] = [];
       const q2FinalList: any[] = [];
       const q3FinalList: any[] = [];
 
+      // ── Process Wave 1 Leads ──
       for (const lead of b.q1.failedLeads) {
-        const leadLogs = reactivationLogs.filter(l => l.leadId === lead.id || (l.lead?.phone && l.lead.phone === lead.phone));
+        const leadLogsByPhone = reactivationLogsByPhone.get(lead.phone) || [];
+        const leadLogsById = reactivationLogsByLeadId.get(lead.id) || [];
+        const leadLogs = [...new Set([...leadLogsByPhone, ...leadLogsById])];
 
-        // For finding specific logs, try strict match first, fallback to legacy match
         let q1Log = leadLogs.find(l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q1")) || leadLogs.find(l => matchLegacy(l, "-q1", b.q1Time));
         let q2Log = leadLogs.find(l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q2")) || leadLogs.find(l => matchLegacy(l, "-q2", b.q2Time));
         let q3Log = leadLogs.find(l => l.correlationId?.startsWith(correlationPrefix) && l.correlationId?.endsWith("-q3")) || leadLogs.find(l => matchLegacy(l, "-q3", b.q3Time));
 
-        // If a wave is in the future, it cannot possibly have run yet. Ignore any stray legacy logs so it shows as fully Pending.
-        if (Date.now() < b.q1Time.getTime()) q1Log = undefined;
-        if (Date.now() < b.q2Time.getTime()) q2Log = undefined;
-        if (Date.now() < b.q3Time.getTime()) q3Log = undefined;
+        if (nowMs < b.q1Time.getTime()) q1Log = undefined;
+        if (nowMs < b.q2Time.getTime()) q2Log = undefined;
+        if (nowMs < b.q3Time.getTime()) q3Log = undefined;
 
-        const completedInQ1 = q1Log?.status === "COMPLETED" && (q1Log.durationSeconds || 0) > 0;
-        const completedInQ2 = q2Log?.status === "COMPLETED" && (q2Log.durationSeconds || 0) > 0;
-        const completedInQ3 = q3Log?.status === "COMPLETED" && (q3Log.durationSeconds || 0) > 0;
-        // Calculate Q1 status
-        const isPendingInQ1 = (b.q1.status !== "Completed" && !q1Log && !isMissed(b.q1Time)) || (isDispatching(b.q1Time) && !q1Log) || (q1Log && PENDING_STATUSES.includes(q1Log.status?.toUpperCase() || ""));
-        const failedInQ1 = !isPendingInQ1 && !completedInQ1;
+        const q1LogStatus = (q1Log?.status || "").toUpperCase();
+        const completedInQ1 = q1LogStatus === "COMPLETED" && (q1Log?.durationSeconds || 0) > 0;
+        const isRingingInQ1 = !completedInQ1 && !!q1Log && PENDING_STATUSES.includes(q1LogStatus);
 
-        // Wave 1 always shows all original leads
-        q1FinalList.push({ ...lead, isCompleted: completedInQ1, isFailed: failedInQ1, isAttempted: !!q1Log, status: q1Log?.status });
+        // At or after 2:30 PM cutoff: any lead not completed is marked FAILED for Wave 1
+        const isPastQ1Cutoff = nowMs >= b.q1CutoffTime.getTime();
+        const failedInQ1 = isPastQ1Cutoff
+          ? !completedInQ1
+          : (!completedInQ1 && !isRingingInQ1 && !!q1Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q1LogStatus));
 
-        // Real-time transfer: Lead propagates to Q2 instantly if Q1 finished but failed (or if Q1 was completely missed)
-        if (failedInQ1) {
-          const isPendingInQ2 = (b.q2.status !== "Completed" && !q2Log && !isMissed(b.q2Time)) || (isDispatching(b.q2Time) && !q2Log) || (q2Log && PENDING_STATUSES.includes(q2Log.status?.toUpperCase() || ""));
-          const failedInQ2 = !isPendingInQ2 && !completedInQ2;
+        const leadQ1Data = {
+          ...lead,
+          isCompleted: completedInQ1,
+          isFailed: failedInQ1,
+          isRinging: isRingingInQ1,
+          isAttempted: !!q1Log,
+          status: q1Log?.status,
+        };
+        q1FinalList.push(leadQ1Data);
 
-          q2FinalList.push({ ...lead, isCompleted: completedInQ2, isFailed: failedInQ2, isAttempted: !!q2Log, status: q2Log?.status });
+        // ── Rollover to Wave 2: All failed leads from Wave 1 (including 2:30 PM cutoff leftovers) ──
+        if (failedInQ1 || (b.q1.status === "Completed" && !completedInQ1)) {
+          const q2LogStatus = (q2Log?.status || "").toUpperCase();
+          const completedInQ2 = q2LogStatus === "COMPLETED" && (q2Log?.durationSeconds || 0) > 0;
+          const isRingingInQ2 = !completedInQ2 && !!q2Log && PENDING_STATUSES.includes(q2LogStatus);
 
-          // Real-time transfer: Lead propagates to Q3 instantly if Q2 finished but failed (or if Q2 was completely missed)
-          if (failedInQ2) {
-            const isPendingInQ3 = (b.q3.status !== "Completed" && !q3Log && !isMissed(b.q3Time)) || (isDispatching(b.q3Time) && !q3Log) || (q3Log && PENDING_STATUSES.includes(q3Log.status?.toUpperCase() || ""));
-            const failedInQ3 = !isPendingInQ3 && !completedInQ3;
+          // At or after 7:30 PM cutoff: any lead not completed is marked FAILED for Wave 2
+          const isPastQ2Cutoff = nowMs >= b.q2CutoffTime.getTime();
+          const failedInQ2 = isPastQ2Cutoff
+            ? !completedInQ2
+            : (!completedInQ2 && !isRingingInQ2 && !!q2Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q2LogStatus));
 
-            q3FinalList.push({ ...lead, isCompleted: completedInQ3, isFailed: failedInQ3, isAttempted: !!q3Log, status: q3Log?.status });
+          const leadQ2Data = {
+            ...lead,
+            isCompleted: completedInQ2,
+            isFailed: failedInQ2,
+            isRinging: isRingingInQ2,
+            isAttempted: !!q2Log,
+            status: q2Log?.status,
+          };
+          q2FinalList.push(leadQ2Data);
+
+          // ── Rollover to Wave 3: All failed leads from Wave 2 (including 7:30 PM cutoff leftovers) ──
+          if (failedInQ2 || (b.q2.status === "Completed" && !completedInQ2)) {
+            const q3LogStatus = (q3Log?.status || "").toUpperCase();
+            const completedInQ3 = q3LogStatus === "COMPLETED" && (q3Log?.durationSeconds || 0) > 0;
+            const isRingingInQ3 = !completedInQ3 && !!q3Log && PENDING_STATUSES.includes(q3LogStatus);
+            const failedInQ3 = !completedInQ3 && !isRingingInQ3 && !!q3Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus);
+
+            const leadQ3Data = {
+              ...lead,
+              isCompleted: completedInQ3,
+              isFailed: failedInQ3,
+              isRinging: isRingingInQ3,
+              isAttempted: !!q3Log,
+              status: q3Log?.status,
+            };
+            q3FinalList.push(leadQ3Data);
           }
         }
       }
 
-      // Override running status if there are unattempted leads AND we are within the 30-minute dispatch window
-      if (b.q1.status !== "Running" && q1FinalList.some(l => !l.isAttempted) && isDispatching(b.q1Time)) {
-        b.q1.status = "Running";
-      }
-      if (b.q2.status !== "Running" && q2FinalList.some(l => !l.isAttempted) && isDispatching(b.q2Time)) {
-        b.q2.status = "Running";
-      }
-      if (b.q3.status !== "Running" && q3FinalList.some(l => !l.isAttempted) && isDispatching(b.q3Time)) {
-        b.q3.status = "Running";
+      // Check if all leads are completed in Wave 3
+      if (b.q3.status === "Running" && q3FinalList.length > 0) {
+        const allQ3Done = q3FinalList.every(l => l.isCompleted || l.isFailed);
+        if (allQ3Done) {
+          b.q3.status = "Completed";
+        }
       }
 
-      // Sort each wave dynamically based on its status
-      const sortWave = (list: any[], waveStatus: string) => {
+      // STRICT USER REQUIREMENT SORTING:
+      // 1st: Running / Ringing call at top!
+      // 2nd: Success (completed) calls!
+      // 3rd: Failed calls!
+      // 4th: Pending calls!
+      const sortWave = (list: any[]) => {
         const getScore = (l: any) => {
-          if (waveStatus === "Running") {
-            if (l.isAttempted && !l.isFailed && !l.isCompleted) return 4; // Ringing/Active at top
-            if (l.isCompleted) return 3; // Success second
-            if (l.isFailed) return 2;    // Failed third
-            return 1;                    // Unattempted last
-          }
-          // Default (Completed/Pending)
-          if (l.isCompleted) return 4; // Success at top
-          if (l.isFailed) return 3;    // Failed second
-          if (l.isAttempted && !l.isFailed && !l.isCompleted) return 2; // Shouldn't happen often in completed
-          return 1;
+          const status = (l.status || "").toUpperCase();
+          const isRinging = l.isRinging || PENDING_STATUSES.includes(status);
+          if (isRinging) return 4;        // 1st: Running/Ringing call at TOP
+          if (l.isCompleted) return 3;    // 2nd: Success
+          if (l.isFailed) return 2;       // 3rd: Failed
+          return 1;                       // 4th: Pending
         };
         return list.sort((a, b) => getScore(b) - getScore(a));
       };
 
-      b.q1.failedLeads = sortWave(q1FinalList, b.q1.status);
-      b.q2.failedLeads = sortWave(q2FinalList, b.q2.status);
-      b.q3.failedLeads = sortWave(q3FinalList, b.q3.status);
+      b.q1.failedLeads = sortWave(q1FinalList);
+      b.q2.failedLeads = sortWave(q2FinalList);
+      b.q3.failedLeads = sortWave(q3FinalList);
 
-      // If a wave has no pending leads after filtering, auto-complete it
-      // (only when the previous wave is already Completed)
+      // Auto-complete wave if 0 failed leads rolled over from earlier wave
       if (b.q1.status === "Completed" && q2FinalList.length === 0) {
         b.q2.status = "Completed";
       }
@@ -406,38 +427,36 @@ export async function GET(req: NextRequest) {
         b.q3.status = "Completed";
       }
 
-      // STRICT WAVE DEPENDENCY: A wave cannot be Completed/Running if the previous wave is not Completed
-      if (b.q1.status === "Pending" || b.q1.status === "Running") {
-        b.q2.status = "Pending";
-        b.q3.status = "Pending";
-      } else if (b.q2.status === "Pending" || b.q2.status === "Running") {
-        b.q3.status = "Pending";
-      }
-
-      // Determine overall campaign status for the sidebar badge
-      // Completed = all 3 waves done (or auto-completed because no failed leads remained)
+      // Overall status
       b.overallStatus =
         b.q3.status === "Completed"
           ? "Completed"
-          : b.q1.status === "Pending"
-          ? "Pending Q1"
-          : b.q2.status === "Pending"
-          ? "Pending Q2"
-          : b.q3.status === "Pending"
-          ? "Pending Q3"
-          : "Running";
+          : b.q1.status === "Running" || b.q2.status === "Running" || b.q3.status === "Running"
+            ? "Running"
+            : b.q1.status === "Pending"
+              ? "Pending Q1"
+              : b.q2.status === "Pending"
+                ? "Pending Q2"
+                : "Pending Q3";
     }
-
 
     const data = Object.values(buckets).sort((a: any, b: any) => b.originalDateMs - a.originalDateMs);
 
-    // Clean up internal dates before sending to client
+    // Clean internal properties before sending response
     for (const b of data) {
       delete b.q1Time;
+      delete b.q1CutoffTime;
       delete b.q2Time;
+      delete b.q2CutoffTime;
       delete b.q3Time;
       delete b.originalDateMs;
     }
+
+    // Cache in memory for 10 seconds
+    dashboardCache.set(companyId, {
+      data,
+      expiry: Date.now() + CACHE_TTL_MS
+    });
 
     return NextResponse.json({ data });
   } catch (error) {

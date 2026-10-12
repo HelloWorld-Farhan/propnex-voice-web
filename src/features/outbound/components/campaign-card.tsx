@@ -197,10 +197,32 @@ export function CampaignCard({
   const [activeTab, setActiveTab] = useState<"pending" | "successful" | "failed">("pending");
   const [expandedScheduleIdx, setExpandedScheduleIdx] = useState<number | null>(null);
   const [leadsModalOpen, setLeadsModalOpen] = useState(false);
-  const [selectedHistId, setSelectedHistId] = useState<string | null>(null);
-  const [historicalCampaigns, setHistoricalCampaigns] = useState<any[]>([]);
   const isReactivationCard = campaign.id === "camp-001" || campaign.isReactivation || campaign.name?.includes("Lead Reactivation");
-  const [isHistoricalLoading, setIsHistoricalLoading] = useState(!!isReactivationCard);
+  const [historicalCampaigns, setHistoricalCampaigns] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("cached_reactivation_campaigns");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [selectedHistId, setSelectedHistId] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("cached_reactivation_campaigns");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed[0].id;
+        }
+      } catch (e) {}
+    }
+    return null;
+  });
+  const [isHistoricalLoading, setIsHistoricalLoading] = useState(false);
   const [wavePages, setWavePages] = useState<Record<string, number>>({});
   const [isCalculating, setIsCalculating] = useState(false);
   const [isDoneChecking, setIsDoneChecking] = useState(false);
@@ -238,6 +260,9 @@ export function CampaignCard({
           .then(res => {
             if (res.data) {
                 setHistoricalCampaigns(res.data);
+                try {
+                  localStorage.setItem("cached_reactivation_campaigns", JSON.stringify(res.data));
+                } catch (e) {}
                 if (res.data.length > 0) {
                   // Select the first one automatically if none is selected
                   setSelectedHistId(prev => prev || res.data[0].id);
@@ -683,7 +708,7 @@ export function CampaignCard({
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">
                 {isReactivationCard
-                  ? (isHistoricalLoading ? "Automatically re-engage failed leads across 3 follow-up waves. (Loading total failed leads...)" : `Automatically re-engage failed leads across 3 follow-up waves. (${totalReactivationLeads} total failed leads today)`)
+                  ? `Automatically re-engage failed leads across 3 follow-up waves. (${totalReactivationLeads} total failed leads today)`
                   : !hasOutboundNumber 
                     ? "Please request an outbound number from the admin to launch campaigns." 
                     : "Upload a CSV contact list to prepare your next outbound campaign."}
@@ -992,7 +1017,7 @@ export function CampaignCard({
                 onClick={() => setLeadsModalOpen(true)}
               >
                 <ListChecks className="size-4" />
-                {isHistoricalLoading ? "Lead Info (...)" : `Lead Info${historicalCampaigns.length > 0 ? ` (${historicalCampaigns.length})` : " (0)"}`}
+                {`Lead Info (${historicalCampaigns.length})`}
               </Button>
             </div>
           )}
@@ -1049,7 +1074,10 @@ export function CampaignCard({
                       >
                         <div className="flex flex-col gap-1 items-start w-full">
                           {(() => {
-                            const getProcessedCount = (wave: any) => wave?.failedLeads?.filter((l: any) => l.isAttempted || l.isCompleted)?.length || 0;
+                            const getProcessedCount = (wave: any) => {
+                              if (!wave?.failedLeads) return 0;
+                              return wave.failedLeads.filter((l: any) => l.isCompleted || l.isFailed || l.isRinging || l.isAttempted || (l.status && l.status !== "PENDING")).length;
+                            };
                             const getTotalCount = (wave: any) => wave?.failedLeads?.length || 0;
 
                             const statusText = hist.q3?.status === "Completed" 
@@ -1157,6 +1185,13 @@ export function CampaignCard({
                           { stage: "Q2", label: activeHist.q2?.label || "Wave 2", data: activeHist.q2 },
                           { stage: "Q3", label: activeHist.q3?.label || "Wave 3", data: activeHist.q3 }
                         ].map((wave, idx) => {
+                          const PENDING_CALL_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+                          const isLeadRinging = (lead: any) => {
+                            if (lead.isCompleted) return false;
+                            const s = (lead.status || "").toUpperCase();
+                            return lead.isRinging || PENDING_CALL_STATUSES.includes(s);
+                          };
+
                           const filteredLeads = (wave.data.failedLeads || []).filter((lead: any) => {
                             if (!reactivationSearchQuery) return true;
                             const q = reactivationSearchQuery.toLowerCase();
@@ -1166,11 +1201,29 @@ export function CampaignCard({
                             const nameMatch = (lead.name || '').toLowerCase().includes(q);
                             return phoneMatch || nameMatch;
                           });
+
+                          // STRICT USER REQUIREMENT SORTING:
+                          // 1st (Top): Ringing / Calling Now lead
+                          // 2nd: Success (Completed) leads
+                          // 3rd: Failed leads
+                          // 4th: Pending leads
+                          const getLeadScore = (lead: any, waveStatus: string) => {
+                            if (isLeadRinging(lead)) return 4;
+                            if (lead.isCompleted) return 3;
+                            const isFailed = lead.isFailed || (waveStatus === "Completed" && !lead.isCompleted);
+                            if (isFailed) return 2;
+                            return 1;
+                          };
+
+                          const sortedLeads = [...filteredLeads].sort((a: any, b: any) => getLeadScore(b, wave.data.status) - getLeadScore(a, wave.data.status));
                           const currentPage = wavePages[`${activeHist.id}-${wave.stage}`] || 1;
                           const itemsPerPage = 10;
-                          const totalPages = Math.max(1, Math.ceil(filteredLeads.length / itemsPerPage));
-                          const paginatedLeads = filteredLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+                          const totalPages = Math.max(1, Math.ceil(sortedLeads.length / itemsPerPage));
+                          const paginatedLeads = sortedLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
+
+                          const processedCount = filteredLeads.filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
+                          const totalCount = filteredLeads.length;
                           
                           return (
                           <div key={wave.stage} className="flex-1 flex flex-col border border-border/60 rounded-2xl bg-card overflow-hidden shadow-sm relative min-h-[300px] md:min-h-0">
@@ -1191,7 +1244,7 @@ export function CampaignCard({
                                   )}
                                 >
                                   {wave.data.status === "Running" 
-                                    ? `Running ${filteredLeads.filter((l: any) => l.isAttempted || l.isCompleted).length} / ${filteredLeads.length}` 
+                                    ? `Running ${processedCount} / ${totalCount}` 
                                     : wave.data.status}
                                 </Badge>
                               </div>
@@ -1199,30 +1252,25 @@ export function CampaignCard({
                                 const total = filteredLeads.length;
                                 const succeeded = filteredLeads.filter((l: any) => l.isCompleted).length;
                                 const failed = wave.data.status === "Completed" ? total - succeeded : filteredLeads.filter((l: any) => l.isFailed).length;
-                                const pending = total - succeeded - failed;
+                                const pending = Math.max(0, total - succeeded - failed);
                                 return (
-                                  <div className="flex items-center justify-between gap-2 text-xs font-medium flex-wrap">
+                                  <div className="flex items-center justify-between gap-1.5 text-xs font-medium flex-wrap">
                                     <span className="flex items-center gap-1">
                                       <span className="text-muted-foreground">Total Leads</span>
-                                      <span className="bg-muted text-foreground px-2 py-0.5 rounded-full">{total}</span>
+                                      <span className="bg-muted text-foreground px-2 py-0.5 rounded-full font-bold">{total}</span>
                                     </span>
-                                    {wave.data.status === "Completed" || wave.data.status === "Running" ? (
-                                      <>
-                                        <span className="flex items-center gap-1">
-                                          <span className="text-emerald-500/80">Success</span>
-                                          <span className="bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-full">{succeeded}</span>
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                          <span className="text-red-500/80">Failed</span>
-                                          <span className="bg-red-500/10 text-red-500 px-2 py-0.5 rounded-full">{failed}</span>
-                                        </span>
-                                      </>
-                                    ) : (
-                                      <span className="flex items-center gap-1">
-                                        <span className="text-amber-500/80">Pending</span>
-                                        <span className="bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded-full">{pending}</span>
-                                      </span>
-                                    )}
+                                    <span className="flex items-center gap-1">
+                                      <span className="text-emerald-500">Success</span>
+                                      <span className="bg-emerald-500/15 text-emerald-500 px-2 py-0.5 rounded-full font-bold">{succeeded}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      <span className="text-red-500">Failed</span>
+                                      <span className="bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full font-bold">{failed}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      <span className="text-amber-500">Pending</span>
+                                      <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
+                                    </span>
                                   </div>
                                 );
                               })()}
@@ -1239,38 +1287,70 @@ export function CampaignCard({
                                 <div className="space-y-1.5 pb-2">
                                   {paginatedLeads.map((lead: any, i: number) => {
                                     const isFailed = lead.isFailed || (wave.data.status === "Completed" && !lead.isCompleted);
-                                    const leadStatus = (lead.status || "").toUpperCase();
-                                    const PENDING_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
-                                    const isRinging = PENDING_STATUSES.includes(leadStatus);
+                                    const isRinging = isLeadRinging(lead);
                                     return (
-                                    <div key={i} className={cn("flex flex-col gap-1 text-xs border border-border/30 pb-2.5 pt-2.5 px-3 rounded-xl bg-background/50 shadow-sm transition-colors", lead.isCompleted ? "border-emerald-500/30 bg-emerald-500/5" : isFailed ? "border-red-500/30 bg-red-500/5" : isRinging ? "border-sky-500/40 bg-sky-500/10" : "hover:bg-muted/30")}>
+                                    <div 
+                                      key={i} 
+                                      className={cn(
+                                        "flex flex-col gap-1 text-xs border pb-2.5 pt-2.5 px-3 rounded-xl shadow-sm transition-colors",
+                                        isRinging 
+                                          ? "border-sky-500/60 bg-sky-500/10 shadow-[0_0_15px_rgba(56,189,248,0.25)] ring-1 ring-sky-500/40" 
+                                          : lead.isCompleted 
+                                          ? "border-emerald-500/30 bg-emerald-500/5" 
+                                          : isFailed 
+                                          ? "border-red-500/30 bg-red-500/5" 
+                                          : "border-border/30 bg-background/50 hover:bg-muted/30"
+                                      )}
+                                    >
                                       <div className="flex items-start justify-between w-full gap-2">
                                         <div className="flex items-start gap-2 flex-1">
                                           <div className="mt-0.5 shrink-0">
-                                            {lead.isCompleted ? (
+                                            {isRinging ? (
+                                              <PhoneOutgoing className="size-4 text-sky-400 animate-bounce" />
+                                            ) : lead.isCompleted ? (
                                               <CheckCircle2 className="size-4 text-emerald-500" />
                                             ) : isFailed ? (
                                               <X className="size-4 text-red-500" />
-                                            ) : isRinging ? (
-                                              <PhoneOutgoing className="size-4 text-white animate-pulse" />
                                             ) : (
                                               <Clock className="size-4 text-muted-foreground opacity-50" />
                                             )}
                                           </div>
                                           <div className="flex flex-col gap-0.5">
-                                            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground opacity-80">
-                                              LEAD {(currentPage - 1) * itemsPerPage + i + 1}
-                                              {(wave.stage === "Q1" || wave.data.status === "Running" || wave.data.status === "Completed") && lead.originalCallType ? ` (${lead.originalCallType})` : ""}
-                                            </span>
-                                            <span className={cn("font-bold text-[13px] tracking-wide text-foreground break-all", lead.isCompleted && "text-emerald-600 dark:text-emerald-400", isFailed && "text-red-600 dark:text-red-400")}>
+                                            <div className="flex items-center gap-1.5">
+                                              <span className={cn(
+                                                "text-[10px] uppercase tracking-wider",
+                                                isRinging ? "font-bold text-sky-400" : "font-semibold text-muted-foreground opacity-80"
+                                              )}>
+                                                LEAD {(currentPage - 1) * itemsPerPage + i + 1}
+                                                {(wave.stage === "Q1" || wave.data.status === "Running" || wave.data.status === "Completed") && lead.originalCallType ? ` (${lead.originalCallType})` : ""}
+                                              </span>
+                                              {isRinging && (
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 animate-pulse">
+                                                  CALLING NOW
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className={cn(
+                                              "font-bold text-[13px] tracking-wide break-all",
+                                              isRinging ? "text-sky-300 font-extrabold" : lead.isCompleted ? "text-emerald-600 dark:text-emerald-400" : isFailed ? "text-red-600 dark:text-red-400" : "text-foreground"
+                                            )}>
                                               {lead.phone}
                                             </span>
                                           </div>
                                         </div>
                                       </div>
-                                      <div className={cn("flex flex-col items-center justify-center w-full mt-2 text-xs font-medium py-2 px-3 rounded-lg border text-center", lead.isCompleted ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400" : isFailed ? "bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400" : isRinging ? "bg-sky-500/20 border-sky-500/30 text-white" : "bg-muted/40 border-border/40 text-muted-foreground")}>
-                                        <span className={cn("text-foreground/90", lead.isCompleted ? "text-emerald-700 dark:text-emerald-400" : isFailed ? "text-red-700 dark:text-red-400" : isRinging ? "text-white font-bold animate-pulse" : "")}>
-                                          {isRinging ? "Calling Now... " : ""}Name - {lead.name || "Unknown"}, DID Number - {lead.didNumber !== "Unknown" ? lead.didNumber : "Unknown"}, Ch - {lead.channels || activeHist.channels || 1}
+                                      <div className={cn(
+                                        "flex flex-col items-center justify-center w-full mt-2 text-xs font-medium py-2 px-3 rounded-lg border text-center",
+                                        isRinging 
+                                          ? "bg-sky-500/20 border-sky-500/40 text-sky-200 shadow-sm animate-pulse font-semibold" 
+                                          : lead.isCompleted 
+                                          ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
+                                          : isFailed 
+                                          ? "bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400" 
+                                          : "bg-muted/40 border-border/40 text-muted-foreground"
+                                      )}>
+                                        <span>
+                                          {isRinging ? "📞 Calling Now... " : ""}Name - {lead.name || "Unknown"}, DID Number - {lead.didNumber !== "Unknown" ? lead.didNumber : "Unknown"}, Ch - {lead.channels || activeHist.channels || 1}
                                         </span>
                                       </div>
                                     </div>
