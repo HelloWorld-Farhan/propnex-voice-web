@@ -80,9 +80,16 @@ function LiveCallTimer({ startedAt }: { startedAt: string }) {
 
 // ─── Active Call Banner ───────────────────────────────────────────────────────
 function ActiveCallBanner({ calls }: { calls: CallRecord[] }) {
-  const liveCalls = calls.filter(
-    (c) => c.status === "ringing" || c.status === "answered"
-  );
+  const seenLive = new Set<string>();
+  const liveCalls = calls.filter((c) => {
+    if (c.status !== "ringing" && c.status !== "answered") return false;
+    const custCore = c.customerNumber.replace(/\D/g, "").slice(-10);
+    const didCore = c.assignedNumber.replace(/\D/g, "").slice(-10);
+    const key = `${custCore}_${didCore}`;
+    if (seenLive.has(key)) return false;
+    seenLive.add(key);
+    return true;
+  });
   if (liveCalls.length === 0) return null;
 
   return (

@@ -213,56 +213,74 @@ export async function POST(req: Request) {
           },
         });
       } else {
-        // Create a CallLog for EVERY matched PhoneNumber so it shows up in EVERY sub-company dashboard perfectly
-        for (const phoneNumber of candidates) {
-          if (isInbound && phoneNumber.direction === "OUTBOUND") {
-            console.log(`Bonvoice Notification: Skipping INBOUND call for OUTBOUND-only number ${phoneNumber.number}`);
-            continue;
-          }
+        // Filter out OUTBOUND-only numbers for inbound calls
+        let filtered = candidates.filter(p => !isInbound || p.direction !== "OUTBOUND");
+        if (filtered.length === 0) filtered = candidates;
 
-          let lead: any = null;
-          if (callerCore && phoneNumber.companyId) {
-            lead = await prisma.lead.findFirst({
-              where: {
-                companyId: phoneNumber.companyId,
-                phone:     { contains: callerCore },
-              },
-            });
-          }
+        const activeFiltered = filtered.filter(p => !p.status || p.status === "ACTIVE");
+        const pool = activeFiltered.length > 0 ? activeFiltered : filtered;
 
-          let parsedStartTime = new Date();
-          if (StartTime) {
-            const stStr = String(StartTime);
-            if (stStr.includes("T")) {
-              parsedStartTime = new Date(stStr);
-            } else {
-              parsedStartTime = new Date(`${stStr.replace(" ", "T")}+05:30`);
-            }
-            if (isNaN(parsedStartTime.getTime())) parsedStartTime = new Date();
-          }
+        // Candidate priority:
+        // 1. If assigned to a sub-company (explicitly delegated DID), choose sub-company
+        // 2. Else parent company (company without parentCompanyId)
+        // 3. Fallback to first candidate in pool
+        const subCompanyCandidate = pool.find(p => p.company && (p.company as any).parentCompanyId);
+        const parentCompanyCandidate = pool.find(p => p.company && !(p.company as any).parentCompanyId);
+        const targetPhoneNumber = subCompanyCandidate || parentCompanyCandidate || pool[0];
 
-          const newLog = await prisma.callLog.create({
-            data: {
-              callLogId:       `CL${Date.now()}-${phoneNumber.id.substring(0, 5)}`,
-              publicId:        `bonvoice-${Date.now()}-${phoneNumber.id.substring(0, 5)}`,
-              direction:       isInbound ? "INBOUND" : "OUTBOUND",
-              status:          mappedStatus as any,
-              companyId:       phoneNumber.companyId ?? undefined,
-              phoneNumberId:   phoneNumber.id,
-              leadId:          lead?.id ?? undefined,
-              aiAgentId:       isInbound ? (phoneNumber.inboundAgentId ?? undefined) : (phoneNumber.outboundAgentId ?? undefined),
-              providerCallId:  callID ? String(callID) : undefined,
-              startedAt:       parsedStartTime,
-              answeredAt:      mappedStatus === "ANSWERED" ? new Date() : undefined,
-              provider:        "BONVOICE",
-              providerStatus:  mappedStatus,
-              providerWebhook: data,
-              historicalDidString: phoneNumber.number,
-              historicalChannels: phoneNumber.channels || 1,
+        // Concurrency guard: check if already created
+        if (callID) {
+          const alreadyCreated = await prisma.callLog.findFirst({
+            where: { providerCallId: String(callID) }
+          });
+          if (alreadyCreated) {
+            console.log(`Bonvoice Notification: CallLog already exists for providerCallId ${callID}`);
+            return NextResponse.json({ success: true });
+          }
+        }
+
+        let lead: any = null;
+        if (callerCore && targetPhoneNumber.companyId) {
+          lead = await prisma.lead.findFirst({
+            where: {
+              companyId: targetPhoneNumber.companyId,
+              phone:     { contains: callerCore },
             },
           });
-          console.log(`Bonvoice Notification: Created call log ${newLog.id} status=${mappedStatus} for company=${phoneNumber.companyId}`);
         }
+
+        let parsedStartTime = new Date();
+        if (StartTime) {
+          const stStr = String(StartTime);
+          if (stStr.includes("T")) {
+            parsedStartTime = new Date(stStr);
+          } else {
+            parsedStartTime = new Date(`${stStr.replace(" ", "T")}+05:30`);
+          }
+          if (isNaN(parsedStartTime.getTime())) parsedStartTime = new Date();
+        }
+
+        const newLog = await prisma.callLog.create({
+          data: {
+            callLogId:       `CL${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
+            publicId:        `bonvoice-${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
+            direction:       isInbound ? "INBOUND" : "OUTBOUND",
+            status:          mappedStatus as any,
+            companyId:       targetPhoneNumber.companyId ?? undefined,
+            phoneNumberId:   targetPhoneNumber.id,
+            leadId:          lead?.id ?? undefined,
+            aiAgentId:       isInbound ? (targetPhoneNumber.inboundAgentId ?? undefined) : (targetPhoneNumber.outboundAgentId ?? undefined),
+            providerCallId:  callID ? String(callID) : undefined,
+            startedAt:       parsedStartTime,
+            answeredAt:      mappedStatus === "ANSWERED" ? new Date() : undefined,
+            provider:        "BONVOICE",
+            providerStatus:  mappedStatus,
+            providerWebhook: data,
+            historicalDidString: targetPhoneNumber.number,
+            historicalChannels: targetPhoneNumber.channels || 1,
+          },
+        });
+        console.log(`Bonvoice Notification: Created SINGLE call log ${newLog.id} status=${mappedStatus} for company=${targetPhoneNumber.companyId}`);
       }
     }
 

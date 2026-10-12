@@ -274,9 +274,25 @@ export function useInboundCallsApi(
 
   const processedState = useMemo(() => {
     let items = state.rawItems;
+    const mapped = items.map((item: any) => mapApiItemToCallRecord(item, fallbackAssignedNumber));
+
+    // Deduplicate calls to guarantee no duplicate rows are rendered
+    const seen = new Set<string>();
+    const dedupedCalls: CallRecord[] = [];
+    for (const call of mapped) {
+      const custCore = (call.customerNumber || "").replace(/\D/g, "").slice(-10);
+      const didCore = (call.assignedNumber || "").replace(/\D/g, "").slice(-10);
+      const timeBucket = call.callDateTime ? Math.floor(new Date(call.callDateTime).getTime() / 15000) : 0;
+      const key = `${call.id || ""}_${custCore}_${didCore}_${timeBucket}`;
+      const callLogKey = call.callId ? `cl_${call.callId}` : key;
+      if (!seen.has(callLogKey)) {
+        seen.add(callLogKey);
+        dedupedCalls.push(call);
+      }
+    }
 
     return {
-      calls: items.map((item: any) => mapApiItemToCallRecord(item, fallbackAssignedNumber)),
+      calls: dedupedCalls,
       rawCalls: items,
       total: state.rawTotal,
       totalPages: state.rawTotalPages,

@@ -167,12 +167,38 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    // Merge live calls at the top, deduplicate by id
-    const seenIds = new Set<string>();
+    // Helper to extract a unique call key across parent and subcompany records
+    function getCallDedupeKey(c: any): string {
+      if (c.providerCallId && String(c.providerCallId).trim()) {
+        return `prov_${String(c.providerCallId).trim()}`;
+      }
+      const caller = getCoreNumber(c.lead?.phone || c.providerWebhook?.SourceNumber || c.providerWebhook?.caller || "");
+      const did = getCoreNumber(c.phoneNumber?.number || c.providerWebhook?.DisplayNumber || c.providerWebhook?.did || "");
+      const timeBucket = c.startedAt ? Math.floor(new Date(c.startedAt).getTime() / 15000) : 0;
+      if (caller && did && timeBucket > 0) {
+        return `call_${caller}_${did}_${timeBucket}`;
+      }
+      return `id_${c.id}`;
+    }
+
+    function formatDisplayNumber(num: string): string {
+      if (!num) return "";
+      const cleaned = num.trim();
+      if (cleaned.startsWith("+")) return cleaned;
+      const digits = cleaned.replace(/\D/g, "");
+      if (digits.length === 10) return `+91${digits}`;
+      if (digits.length === 11 && digits.startsWith("0")) return `+91${digits.substring(1)}`;
+      if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+      return cleaned;
+    }
+
+    // Merge live calls at the top, deduplicate by call key so a call never appears twice
+    const seenCallKeys = new Set<string>();
     const mergedCalls: any[] = [];
     for (const c of [...liveCalls, ...calls]) {
-      if (!seenIds.has(c.id)) {
-        seenIds.add(c.id);
+      const key = getCallDedupeKey(c);
+      if (!seenCallKeys.has(key)) {
+        seenCallKeys.add(key);
         mergedCalls.push(c);
       }
     }
@@ -209,11 +235,14 @@ export async function GET(req: NextRequest) {
          }
       }
 
+      const custRaw = call.lead?.phone || fallbackCustomerNumber || "";
+      const assignRaw = call.phoneNumber?.number || fallbackAssignedNumber || "";
+
       return {
         id: call.id,
         callId: call.callLogId,
-        customerNumber: call.lead?.phone || fallbackCustomerNumber || "",
-        assignedNumber: call.phoneNumber?.number || fallbackAssignedNumber || "",
+        customerNumber: formatDisplayNumber(custRaw),
+        assignedNumber: formatDisplayNumber(assignRaw),
         callDateTime: call.startedAt.toISOString(),
         duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
         durationSeconds: call.durationSeconds || 0,
@@ -226,13 +255,15 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const adjustedTotal = Math.max(mappedCalls.length, total);
+
     return NextResponse.json({
       data: mappedCalls,
       meta: {
-        total,
+        total: adjustedTotal,
         page,
         limit,
-        totalPages: Math.ceil(total / limit) || 1,
+        totalPages: Math.ceil(adjustedTotal / limit) || 1,
       },
     });
   } catch (err: any) {
