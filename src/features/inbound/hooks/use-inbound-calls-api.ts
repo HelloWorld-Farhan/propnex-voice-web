@@ -225,12 +225,24 @@ export function useInboundCallsApi(
           return s === "ringing" || s === "answered" || s === "queued";
         });
 
-        setState({
-          rawItems: items,
-          rawTotal: res.meta?.total || 0,
-          rawTotalPages: res.meta?.totalPages || 1,
-          loading: false,
-          error: null,
+        // Avoid unnecessary re-renders: if polling returns the exact same calls, do not update state
+        setState((prev) => {
+          const prevSignature = prev.rawItems
+            .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
+            .join(",");
+          const nextSignature = items
+            .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
+            .join(",");
+          if (isPolling && prevSignature === nextSignature && prev.rawTotal === (res.meta?.total || 0)) {
+            return prev; // Skip re-render
+          }
+          return {
+            rawItems: items,
+            rawTotal: res.meta?.total || 0,
+            rawTotalPages: res.meta?.totalPages || 1,
+            loading: false,
+            error: null,
+          };
         });
 
         // Only cache non-live responses to avoid stale live data
@@ -244,11 +256,11 @@ export function useInboundCallsApi(
           saveInboundCache();
         }
 
-        // Smart polling: always 2s for inbound so RINGING shows near-instantly
-        if (isPolling) {
-          clearInterval(intervalId);
-          intervalId = setInterval(() => void load(true), 2000);
-        }
+        // Smart polling: if there are live calls (RINGING/ANSWERED), poll every 3s.
+        // Otherwise, poll quietly every 20s in background to prevent constant UI refreshes!
+        clearInterval(intervalId);
+        const pollInterval = hasLiveCalls ? 3000 : 20000;
+        intervalId = setInterval(() => void load(true), pollInterval);
       } catch (err) {
         if (isCancelled) return;
         const message =
@@ -263,8 +275,8 @@ export function useInboundCallsApi(
 
     void load();
 
-    // Poll every 2s so RINGING calls appear near-instantly
-    intervalId = setInterval(() => void load(true), 2000);
+    // Default 20s background poll when no active live calls
+    intervalId = setInterval(() => void load(true), 20000);
 
     return () => {
       isCancelled = true;

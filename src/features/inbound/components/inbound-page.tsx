@@ -10,7 +10,6 @@ import { EmptyState } from "@/components/common/empty-state";
 import { InboundFilters } from "@/features/inbound/components/inbound-filters";
 import { TranscriptDrawer } from "@/components/common/transcript-drawer";
 import { useInboundCallsApi } from "@/features/inbound/hooks/use-inbound-calls-api";
-import { useInboundCalls } from "@/features/inbound/hooks/use-inbound-calls";
 import {
   DEFAULT_CALL_FILTERS,
   type CallLogFilters,
@@ -133,11 +132,15 @@ function ActiveCallBanner({ calls }: { calls: CallRecord[] }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export function InboundPageContent() {
-  const {
-    filters,
-    updateFilters: handleFiltersChange,
-    resetFilters: handleResetFilters,
-  } = useInboundCalls();
+  const [filters, setFilters] = useState<CallLogFilters>(DEFAULT_CALL_FILTERS);
+  const handleFiltersChange = (next: CallLogFilters) => {
+    setFilters(next);
+    setPage(1);
+  };
+  const handleResetFilters = () => {
+    setFilters(DEFAULT_CALL_FILTERS);
+    setPage(1);
+  };
 
   const [page, setPage] = useState(1);
   const [retryKey, setRetryKey] = useState(0);

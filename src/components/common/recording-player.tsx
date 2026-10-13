@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Pause, Play, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,23 +28,19 @@ export function RecordingPlayer({
   className,
 }: RecordingPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [hasError, setHasError] = useState(() => {
-    if (typeof window !== 'undefined' && audioUrl) {
-      return localStorage.getItem(`rec_fail_${audioUrl}`) === 'true';
-    }
-    return false;
-  });
-  const [isValidating, setIsValidating] = useState(() => {
-    if (typeof window !== 'undefined' && audioUrl) {
-      if (localStorage.getItem(`rec_fail_${audioUrl}`) === 'true') return false;
-      if (localStorage.getItem(`rec_ok_${audioUrl}`) === 'true') return false;
-    }
-    return !!audioUrl;
-  });
+  const [hasError, setHasError] = useState(false);
+  const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Exclusive playback listener
+  useEffect(() => {
+    if (durationSeconds > 0) {
+      setMediaDuration(durationSeconds);
+    }
+  }, [durationSeconds]);
+
+  // Global listener: pause this player when another starts playing
   useEffect(() => {
     const handleGlobalPlay = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -53,43 +49,34 @@ export function RecordingPlayer({
           audioRef.current.pause();
         }
         setIsPlaying(false);
+        setIsBuffering(false);
       }
     };
     window.addEventListener("recording-play", handleGlobalPlay);
     return () => window.removeEventListener("recording-play", handleGlobalPlay);
   }, [audioUrl, isPlaying]);
 
-  const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
-  const [retryCount, setRetryCount] = useState(0);
-  const [reloadKey, setReloadKey] = useState(0);
-  const durationRef = useRef(durationSeconds);
-  
+  // Clean up audio on unmount
   useEffect(() => {
-    durationRef.current = durationSeconds;
-    if (durationSeconds > 0) {
-      setMediaDuration(durationSeconds);
-    }
-  }, [durationSeconds]);
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
-  // Initialize the audio element when the URL is available
-  useEffect(() => {
-    if (!audioUrl || hasError) return; // Skip initialization if already marked as error from cache
+  const getOrCreateAudio = useCallback(() => {
+    if (audioRef.current) return audioRef.current;
+    if (!audioUrl) return null;
 
-    let isMounted = true;
-    setIsValidating(true);
-
-    const proxyUrl = audioUrl.startsWith('http') && !audioUrl.includes('/api/audio-proxy') 
+    const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio-proxy")
       ? `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}`
       : audioUrl;
 
-    const buster = (retryCount > 0 || reloadKey > 0) ? (proxyUrl.includes('?') ? `&_t=${Date.now()}` : `?_t=${Date.now()}`) : '';
-    const audio = new Audio(proxyUrl + buster);
-    
-    // Always load metadata so audio duration and stream readiness are known
+    const audio = new Audio(proxyUrl);
     audio.preload = "metadata";
-    audio.load();
-    
-    audioRef.current = audio;
 
     const syncDuration = () => {
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
@@ -97,134 +84,105 @@ export function RecordingPlayer({
       }
     };
 
-    const updateTime = () => {
+    audio.addEventListener("timeupdate", () => {
       setProgress(audio.currentTime);
       syncDuration();
-    };
+    });
 
-    const handleEnded = () => {
+    audio.addEventListener("loadedmetadata", syncDuration);
+    audio.addEventListener("durationchange", syncDuration);
+
+    audio.addEventListener("canplay", () => {
+      syncDuration();
+      setIsBuffering(false);
+    });
+
+    audio.addEventListener("playing", () => {
+      setIsBuffering(false);
+      setIsPlaying(true);
+    });
+
+    audio.addEventListener("pause", () => {
       setIsPlaying(false);
-      const finalDur = durationRef.current > 0 ? durationRef.current : (audio.duration || 0);
-      setProgress(finalDur > 0 ? finalDur : 0);
-    };
+      setIsBuffering(false);
+    });
 
-    const handleError = () => {
-      if (!isMounted) return;
-      // Bonvoice recordings can take up to 60-90s to process after call ends.
-      // Retry with exponential backoff: 3s, 6s, 12s, 20s, 30s, 30s = up to ~100s
-      const delays = [3000, 6000, 12000, 20000, 30000, 30000];
-      if (retryCount < delays.length) {
-        const delay = delays[retryCount];
-        setTimeout(() => {
-          if (isMounted) setRetryCount((prev) => prev + 1);
-        }, delay);
-      } else {
-        setHasError(true);
-        setIsValidating(false);
-        setIsPlaying(false);
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(`rec_fail_${audioUrl}`, 'true');
-        }
-      }
-    };
+    audio.addEventListener("ended", () => {
+      setIsPlaying(false);
+      setIsBuffering(false);
+      setProgress(0);
+      audio.currentTime = 0;
+    });
 
-    const handleLoadedMetadata = () => {
-      if (!isMounted) return;
-      syncDuration();
-      setHasError(false);
-      setIsValidating(false);
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(`rec_fail_${audioUrl}`);
-        localStorage.setItem(`rec_ok_${audioUrl}`, 'true');
-      }
-    };
+    audio.addEventListener("error", () => {
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setHasError(true);
+    });
 
-    if (audio.readyState >= 1) {
-      syncDuration();
-      setIsValidating(false);
-    }
+    audioRef.current = audio;
+    return audio;
+  }, [audioUrl]);
 
-    audio.addEventListener("timeupdate", updateTime);
-    audio.addEventListener("ended", handleEnded);
-    audio.addEventListener("error", handleError);
-    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
-    audio.addEventListener("durationchange", handleLoadedMetadata);
-    audio.addEventListener("canplay", handleLoadedMetadata);
-
-    return () => {
-      isMounted = false;
-      audio.removeEventListener("timeupdate", updateTime);
-      audio.removeEventListener("ended", handleEnded);
-      audio.removeEventListener("error", handleError);
-      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      audio.removeEventListener("durationchange", handleLoadedMetadata);
-      audio.removeEventListener("canplay", handleLoadedMetadata);
-      audio.pause();
-      audioRef.current = null;
-    };
-  }, [audioUrl, retryCount, reloadKey]);
-
-  const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : (audioRef.current?.duration || 0));
+  const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : 0);
 
   const handleToggle = () => {
-    if (!audioRef.current) {
-      if (audioUrl) {
-        window.open(audioUrl, "_blank", "noopener,noreferrer");
-      }
-      return;
-    }
+    if (!audioUrl) return;
+
+    const audio = getOrCreateAudio();
+    if (!audio) return;
 
     if (isPlaying) {
-      audioRef.current.pause();
+      audio.pause();
       setIsPlaying(false);
+      setIsBuffering(false);
     } else {
-      if (audioRef.current.readyState === 0) {
-        audioRef.current.load();
-      }
-      // If we finished, restart
       if (currentDuration > 0 && progress >= currentDuration) {
-        audioRef.current.currentTime = 0;
+        audio.currentTime = 0;
         setProgress(0);
       }
-      audioRef.current.play().then(() => {
+      setIsBuffering(true);
+      audio.play().then(() => {
         setIsPlaying(true);
-        if (audioRef.current && audioRef.current.duration && !isNaN(audioRef.current.duration) && isFinite(audioRef.current.duration)) {
-          setMediaDuration(Math.round(audioRef.current.duration));
-        }
-        // Dispatch event so other players pause
+        setIsBuffering(false);
         window.dispatchEvent(new CustomEvent("recording-play", { detail: audioUrl }));
-      }).catch(err => {
-        console.error("Failed to play audio:", err);
+      }).catch((err) => {
+        setIsBuffering(false);
         if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
+          console.error("Audio playback error:", err);
           setHasError(true);
         }
       });
     }
   };
+
+  const handleRetry = () => {
+    setHasError(false);
+    setIsBuffering(false);
+    if (audioRef.current) {
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
+    const audio = getOrCreateAudio();
+    if (audio) {
+      audio.load();
+    }
+  };
+
   const progressPercent = currentDuration > 0 ? (progress / currentDuration) * 100 : 0;
 
   if (compact) {
     if (hasError) {
       return (
-        <div className={cn("flex items-center gap-2", className)}>
-          <span className="text-xs text-destructive flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-destructive animate-pulse" />
-            Not found
-          </span>
+        <div className={cn("flex items-center gap-1.5", className)}>
+          <span className="text-xs text-muted-foreground">Not found</span>
           <Button
             variant="ghost"
             size="icon-sm"
-            className="h-6 w-6 hover:bg-destructive/10 hover:text-destructive"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
-              // Clear cached failure so retry works fresh
-              if (typeof window !== 'undefined' && audioUrl) {
-                localStorage.removeItem(`rec_fail_${audioUrl}`);
-              }
-              setHasError(false);
-              setIsValidating(true);
-              setRetryCount(0);
-              setReloadKey(k => k + 1);
+              handleRetry();
             }}
             aria-label="Retry loading recording"
             title="Retry loading recording"
@@ -241,10 +199,12 @@ export function RecordingPlayer({
           variant="outline"
           size="icon-sm"
           onClick={handleToggle}
-          disabled={!audioUrl || isValidating}
+          onMouseEnter={() => getOrCreateAudio()}
+          disabled={!audioUrl}
           aria-label={isPlaying ? "Pause recording" : "Play recording"}
+          className="h-7 w-7 rounded-lg"
         >
-          {isValidating ? (
+          {isBuffering ? (
             <span className="size-3.5 border-[1.5px] border-muted-foreground border-t-transparent rounded-full animate-spin" />
           ) : isPlaying ? (
             <Pause className="size-3.5" />
@@ -252,7 +212,7 @@ export function RecordingPlayer({
             <Play className="size-3.5" />
           )}
         </Button>
-        <span className="text-xs text-muted-foreground min-w-[70px]">
+        <span className="text-xs tabular-nums text-muted-foreground min-w-[70px]">
           {formatTime(progress)} / {formatTime(currentDuration)}
         </span>
       </div>
@@ -272,12 +232,7 @@ export function RecordingPlayer({
           variant="outline"
           size="sm"
           className="w-full text-xs h-8"
-          onClick={() => {
-            setHasError(false);
-            setIsValidating(true);
-            setRetryCount(0);
-            setReloadKey(k => k + 1);
-          }}
+          onClick={handleRetry}
         >
           <RotateCw className="size-3.5 mr-1.5" />
           Retry
@@ -312,9 +267,10 @@ export function RecordingPlayer({
         size="sm"
         className="w-full"
         onClick={handleToggle}
-        disabled={!audioUrl || isValidating}
+        onMouseEnter={() => getOrCreateAudio()}
+        disabled={!audioUrl}
       >
-        {isValidating ? (
+        {isBuffering ? (
           <>
             <span className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-1" />
             Loading...
