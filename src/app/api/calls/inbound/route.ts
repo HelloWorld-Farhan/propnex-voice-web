@@ -70,8 +70,8 @@ export async function GET(req: NextRequest) {
     const minDuration = searchParams.get("minDuration");
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
-    const sortBy = searchParams.get("sortBy") || "duration";
-    const sortOrder = (searchParams.get("sortOrder") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+    const sortBy = searchParams.get("sortBy") || "date";
+    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
     const directionParam = searchParams.get("direction");
     const directionVal = directionParam?.toUpperCase() === "OUTBOUND" ? "OUTBOUND" : "INBOUND";
 
@@ -275,10 +275,9 @@ export async function GET(req: NextRequest) {
       const assignRaw = call.phoneNumber?.number || fallbackAssignedNumber || "";
 
       const rawInboundStatus = call.status.toLowerCase();
-      const UNANSWERED_STATUSES = ["failed", "missed", "no_answer", "busy", "cancelled"];
       const inboundDisplayStatus =
-        UNANSWERED_STATUSES.includes(rawInboundStatus) && (call.durationSeconds || 0) === 0
-          ? "completed"
+        rawInboundStatus === "busy" || rawInboundStatus === "no_answer" || rawInboundStatus === "noanswer"
+          ? "missed"
           : rawInboundStatus;
 
       return {

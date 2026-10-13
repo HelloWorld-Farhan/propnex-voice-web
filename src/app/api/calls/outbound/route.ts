@@ -74,8 +74,8 @@ export async function GET(req: NextRequest) {
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
     const statusParam = searchParams.get("status");
-    const sortBy = searchParams.get("sortBy") || "duration";
-    const sortOrder = (searchParams.get("sortOrder") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+    const sortBy = searchParams.get("sortBy") || "date";
+    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
 
     const getWhereClause = () => {
       const whereClause: any = {
@@ -303,10 +303,9 @@ export async function GET(req: NextRequest) {
       // Show as "completed" in the UI so the outbound table is consistent with what the user expects.
       // Calls that genuinely failed mid-call (durationSeconds > 0 but status FAILED) keep their real status.
       const rawStatus = call.status.toLowerCase();
-      const UNANSWERED_STATUSES = ["failed", "missed", "no_answer", "busy", "cancelled"];
       const displayStatus =
-        UNANSWERED_STATUSES.includes(rawStatus) && (call.durationSeconds || 0) === 0
-          ? "completed"
+        rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer"
+          ? "missed"
           : rawStatus;
 
       const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
