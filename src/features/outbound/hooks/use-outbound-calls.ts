@@ -55,9 +55,21 @@ export function useOutboundCalls() {
       const newTotal = data.meta?.total || 0;
       const newPages = data.meta?.totalPages || 1;
 
-      setCalls(newCalls);
-      setTotalCalls(newTotal);
-      setTotalPages(newPages);
+      // Prevent unnecessary re-renders: skip state update if background poll returns unchanged calls
+      setCalls((prev) => {
+        const prevSig = prev
+          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.recordingUrl}`)
+          .join(",");
+        const nextSig = newCalls
+          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.recordingUrl}`)
+          .join(",");
+        if (isBackground && prevSig === nextSig) {
+          return prev;
+        }
+        return newCalls;
+      });
+      setTotalCalls((prev) => (prev === newTotal ? prev : newTotal));
+      setTotalPages((prev) => (prev === newPages ? prev : newPages));
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -70,10 +82,10 @@ export function useOutboundCalls() {
   useEffect(() => {
     fetchCalls(false);
     
-    // Poll every 1s for highly responsive live updates
+    // Background polling: 15s when quiet to prevent UI jumping/fluctuation
     const id = setInterval(() => {
       fetchCalls(true);
-    }, 5000);
+    }, 15000);
     
     return () => clearInterval(id);
   }, [fetchCalls]);

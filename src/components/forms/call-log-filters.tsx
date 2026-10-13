@@ -1,11 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import {
-  Filter,
   RotateCcw,
   Search,
-  Loader2,
   Calendar,
   Clock,
   PhoneCall,
@@ -14,7 +12,6 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import { SelectField } from "@/components/forms/select-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,7 +31,7 @@ type CallLogFiltersBarProps = {
   loading?: boolean;
 };
 
-export function CallLogFiltersBar({
+export const CallLogFiltersBar = memo(function CallLogFiltersBar({
   filters,
   onChange,
   onReset,
@@ -45,9 +42,20 @@ export function CallLogFiltersBar({
 }: CallLogFiltersBarProps) {
   const [localFilters, setLocalFilters] = useState<CallLogFilters>(filters);
 
-  // Sync with external filters if they reset or change externally
+  // Sync only when actual filter values differ to prevent wiping input state or re-rendering
   useEffect(() => {
-    setLocalFilters(filters);
+    setLocalFilters((prev) => {
+      const isSame =
+        prev.search === filters.search &&
+        prev.status === filters.status &&
+        prev.dateFrom === filters.dateFrom &&
+        prev.dateTo === filters.dateTo &&
+        prev.assignedNumber === filters.assignedNumber &&
+        prev.callerNumber === filters.callerNumber &&
+        prev.minDuration === filters.minDuration &&
+        prev.durationUnit === filters.durationUnit;
+      return isSame ? prev : filters;
+    });
   }, [filters]);
 
   const update = (patch: Partial<CallLogFilters>) => {
@@ -120,7 +128,6 @@ export function CallLogFiltersBar({
               size="sm"
               className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
               onClick={handleReset}
-              disabled={loading}
             >
               <RotateCcw className="size-3.5" />
               <span>Reset</span>
@@ -131,13 +138,8 @@ export function CallLogFiltersBar({
             size="sm"
             className="h-8 gap-1.5 px-3.5 text-xs font-medium shadow-xs"
             onClick={handleSearch}
-            disabled={loading}
           >
-            {loading ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Search className="size-3.5" />
-            )}
+            <Search className="size-3.5" />
             <span>Search</span>
           </Button>
         </div>
@@ -174,7 +176,6 @@ export function CallLogFiltersBar({
                     if (e.key === "Enter") handleSearch();
                   }}
                   className="pl-9 h-9.5 text-sm"
-                  disabled={loading}
                 />
               </div>
             </div>
@@ -199,7 +200,6 @@ export function CallLogFiltersBar({
                   if (e.key === "Enter") handleSearch();
                 }}
                 className="pl-9 h-9.5 text-sm"
-                disabled={loading}
               />
             </div>
           </div>
@@ -220,7 +220,6 @@ export function CallLogFiltersBar({
                   status: e.target.value as CallLogFilters["status"],
                 })
               }
-              disabled={loading}
               className="flex h-9.5 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground transition-colors [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {CALL_STATUS_OPTIONS.map((option) => (
@@ -251,7 +250,6 @@ export function CallLogFiltersBar({
                 if (e.key === "Enter") handleSearch();
               }}
               className="h-9.5 text-sm"
-              disabled={loading}
             />
           </div>
 
@@ -272,7 +270,6 @@ export function CallLogFiltersBar({
                 if (e.key === "Enter") handleSearch();
               }}
               className="h-9.5 text-sm"
-              disabled={loading}
             />
           </div>
 
@@ -297,7 +294,6 @@ export function CallLogFiltersBar({
                   if (e.key === "Enter") handleSearch();
                 }}
                 className="flex-1 h-9.5 text-sm"
-                disabled={loading}
               />
               <select
                 id={`${searchId}-unit`}
@@ -307,7 +303,6 @@ export function CallLogFiltersBar({
                     durationUnit: e.target.value as "sec" | "min",
                   })
                 }
-                disabled={loading}
                 className="w-24 shrink-0 rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground transition-colors [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9.5"
               >
                 <option value="sec">Seconds</option>
@@ -319,4 +314,4 @@ export function CallLogFiltersBar({
       </div>
     </div>
   );
-}
+});
