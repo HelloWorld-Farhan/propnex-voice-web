@@ -132,7 +132,7 @@ export async function POST(req: Request) {
     if (existingLogs.length === 0 && didVariants.length > 0) {
       existingLogs = await prisma.callLog.findMany({
         where: {
-          status:      { in: ["RINGING", "ANSWERED", "QUEUED"] },
+          status:      { in: ["RINGING", "ANSWERED", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "PENDING"] },
           phoneNumber: { number: { in: didVariants } },
         },
         include: { phoneNumber: { include: { company: true } } },
@@ -142,6 +142,38 @@ export async function POST(req: Request) {
       // Filter out old calls (older than 1 hour)
       existingLogs = existingLogs.filter((log: any) => Date.now() - log.createdAt.getTime() < 3600000);
     }
+
+    // 3. Last resort: look for a platform-created log with OUT-/pending- prefix providerCallId
+    // that matches the DID phone number — covers the case where notification webhook arrived
+    // before we could link the Bonvoice callID to the platform log
+    if (existingLogs.length === 0 && didVariants.length > 0) {
+      const callerCoreStr = corePhone(callerNumber);
+      const platformLogs = await prisma.callLog.findMany({
+        where: {
+          phoneNumber: { number: { in: didVariants } },
+          OR: [
+            { providerCallId: { startsWith: "OUT-" } },
+            { providerCallId: { startsWith: "pending-" } },
+            { providerCallId: { startsWith: "DISP-" } },
+          ],
+        },
+        include: { phoneNumber: { include: { company: true } }, lead: true },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      });
+      // Filter by caller phone if available, else take most recent within 2 hours
+      const recentPlatform = platformLogs.filter((l: any) => Date.now() - l.createdAt.getTime() < 7200000);
+      if (callerCoreStr) {
+        const callerMatch = recentPlatform.filter((l: any) => (l.lead?.phone || "").replace(/\D/g, "").slice(-10) === callerCoreStr.slice(-10));
+        existingLogs = callerMatch.length > 0 ? callerMatch : recentPlatform.slice(0, 1);
+      } else {
+        existingLogs = recentPlatform.slice(0, 1);
+      }
+      if (existingLogs.length > 0) {
+        console.log(`Bonvoice Hangup: Found ${existingLogs.length} platform log(s) via OUT-/pending- fallback lookup`);
+      }
+    }
+
 
     let startTimeParsed = new Date();
     if (StartTime) {

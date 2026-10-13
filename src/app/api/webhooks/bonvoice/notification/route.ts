@@ -260,6 +260,53 @@ export async function POST(req: Request) {
           if (isNaN(parsedStartTime.getTime())) parsedStartTime = new Date();
         }
 
+        // ── NEW: Before creating a new call log, check if the platform already created
+        // a PENDING/RINGING/DISPATCHING call log for the same DID + caller (when it
+        // dispatched the call via Bonvoice API). If found, update it with the Bonvoice
+        // callID so the hangup webhook will find and close it properly.
+        // This prevents platform-initiated calls from permanently stuck in RINGING state.
+        let platformLog: any = null;
+        if (callerCore && targetPhoneNumber.id) {
+          platformLog = await prisma.callLog.findFirst({
+            where: {
+              phoneNumberId: targetPhoneNumber.id,
+              status: { in: ["PENDING", "RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "ANSWERED"] },
+              lead: { phone: { contains: callerCore } },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+          // Also try without lead constraint (manual dial or unmatched lead)
+          if (!platformLog) {
+            platformLog = await prisma.callLog.findFirst({
+              where: {
+                phoneNumberId: targetPhoneNumber.id,
+                status: { in: ["PENDING", "RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "ANSWERED"] },
+                leadId: null,
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          }
+        }
+
+        if (platformLog) {
+          // Update the existing platform-created log with the Bonvoice callID and status
+          await prisma.callLog.update({
+            where: { id: platformLog.id },
+            data: {
+              status: mappedStatus as any,
+              providerCallId: callID ? String(callID) : platformLog.providerCallId,
+              answeredAt: mappedStatus === "ANSWERED" ? new Date() : undefined,
+              providerStatus: mappedStatus,
+              providerWebhook: data,
+              historicalDidString: platformLog.historicalDidString || didNumber,
+              historicalChannels: platformLog.historicalChannels || 1,
+            },
+          });
+          console.log(`Bonvoice Notification: Updated platform call log ${platformLog.id} → ${mappedStatus} (bonvoice callID: ${callID})`);
+          return NextResponse.json({ success: true });
+        }
+
+        // No existing platform log found — create a new one (call initiated outside platform)
         const newLog = await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
@@ -280,7 +327,8 @@ export async function POST(req: Request) {
             historicalChannels: targetPhoneNumber.channels || 1,
           },
         });
-        console.log(`Bonvoice Notification: Created SINGLE call log ${newLog.id} status=${mappedStatus} for company=${targetPhoneNumber.companyId}`);
+        console.log(`Bonvoice Notification: Created new call log ${newLog.id} status=${mappedStatus} for company=${targetPhoneNumber.companyId}`);
+
       }
     }
 
