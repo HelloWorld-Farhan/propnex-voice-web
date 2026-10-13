@@ -1210,7 +1210,12 @@ export function CampaignCard({
                             return lead.isRinging || PENDING_CALL_STATUSES.includes(s);
                           };
 
+                          // Ringing leads are ALWAYS shown at top — never filtered by search query
+                          const ringingLeads = (wave.data.failedLeads || []).filter((l: any) => isLeadRinging(l));
+
                           const filteredLeads = (wave.data.failedLeads || []).filter((lead: any) => {
+                            // Ringing leads are always shown separately at top — exclude from filtered list to avoid duplicates
+                            if (isLeadRinging(lead)) return false;
                             if (!reactivationSearchQuery) return true;
                             const q = reactivationSearchQuery.toLowerCase();
                             const cleanQ = q.replace(/\D/g, '');
@@ -1221,12 +1226,11 @@ export function CampaignCard({
                           });
 
                           // STRICT USER REQUIREMENT SORTING:
-                          // 1st (Top): Ringing / Calling Now lead
+                          // 1st (Top): Ringing / Calling Now lead (already separated above)
                           // 2nd: Success (Completed) leads
                           // 3rd: Failed leads
                           // 4th: Pending leads
                           const getLeadScore = (lead: any, waveStatus: string) => {
-                            if (isLeadRinging(lead)) return 4;
                             if (lead.isCompleted) return 3;
                             const isFailed = lead.isFailed || (waveStatus === "Completed" && !lead.isCompleted);
                             if (isFailed) return 2;
@@ -1234,15 +1238,14 @@ export function CampaignCard({
                           };
 
                           const sortedLeads = [...filteredLeads].sort((a: any, b: any) => getLeadScore(b, wave.data.status) - getLeadScore(a, wave.data.status));
-                          // Ringing / Calling now leads are ALWAYS pinned at the very top of the wave
-                          const ringingLeads = (wave.data.failedLeads || []).filter((l: any) => isLeadRinging(l));
-                          const nonRingingLeads = sortedLeads.filter((l: any) => !isLeadRinging(l));
+                          const nonRingingLeads = sortedLeads; // ringing already excluded above
 
                           const currentPage = wavePages[`${activeHist.id}-${wave.stage}`] || 1;
                           const itemsPerPage = 10;
                           const totalPages = Math.max(1, Math.ceil(nonRingingLeads.length / itemsPerPage));
                           const paginatedLeads = nonRingingLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
+
 
                           const processedCount = (wave.data.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
                           const totalCount = (wave.data.failedLeads || []).length;

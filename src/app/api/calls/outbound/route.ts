@@ -174,26 +174,59 @@ export async function GET(req: NextRequest) {
     const prismaOrderBy: any = sortBy === "duration"
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
-    
-    const [total, calls] = await Promise.all([
+
+    // Always fetch live (ringing/answered) outbound calls separately so they pin to the top
+    const shouldIncludeLive = !statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
+    const liveOutboundWhere: any = {
+      companyId: { in: companyIdsToQuery },
+      direction: "OUTBOUND",
+      status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
+    };
+
+    const [total, calls, liveCalls] = await Promise.all([
       prisma.callLog.count({ where: whereClause }),
       prisma.callLog.findMany({
         where: whereClause,
         orderBy: prismaOrderBy,
         skip,
         take: limit,
-        include: { 
-          phoneNumber: true, 
+        include: {
+          phoneNumber: true,
           lead: true,
           campaign: { include: { phoneNumbers: { take: 1 } } },
           company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } }
-        }
-      })
+        },
+      }),
+      shouldIncludeLive
+        ? prisma.callLog.findMany({
+            where: liveOutboundWhere,
+            orderBy: { startedAt: "desc" },
+            take: 20,
+            include: {
+              phoneNumber: true,
+              lead: true,
+              campaign: { include: { phoneNumbers: { take: 1 } } },
+              company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } }
+            },
+          })
+        : Promise.resolve([]),
     ]);
-    
-    const mappedCalls = calls.map(call => {
+
+
+    // Merge: live calls at top, deduplicate by id so a call never appears twice
+    const seenIds = new Set<string>();
+    const mergedCalls: any[] = [];
+    for (const c of [...liveCalls, ...calls]) {
+      if (!seenIds.has(c.id)) {
+        seenIds.add(c.id);
+        mergedCalls.push(c);
+      }
+    }
+
+    const mappedCalls = mergedCalls.map(call => {
       const minutes = Math.floor((call.durationSeconds || 0) / 60);
       const seconds = (call.durationSeconds || 0) % 60;
+
       
       // Aggressively extract assigned/DID number from all available JSON fields
       let fallbackAssignedNumber = "";
@@ -276,6 +309,9 @@ export async function GET(req: NextRequest) {
           ? "completed"
           : rawStatus;
 
+      const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
+      const isLive = LIVE_STATUSES.includes(call.status);
+
       return {
         id: call.id,
         callId: call.callLogId,
@@ -284,26 +320,29 @@ export async function GET(req: NextRequest) {
         callDateTime: call.startedAt.toISOString(),
         duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
         durationSeconds: call.durationSeconds || 0,
-        status: displayStatus,
+        status: isLive ? rawStatus : displayStatus,
         creditsUsed: call.creditsUsed || 0,
         recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],
-        liveStartedAt: (call.status === "RINGING" || call.status === "ANSWERED") ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
+        liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
         callType,
       };
 
     });
 
+    const adjustedTotal = Math.max(mappedCalls.length, total);
+
     return NextResponse.json({
       data: mappedCalls,
       meta: {
-        total,
+        total: adjustedTotal,
         page,
         limit,
-        totalPages: Math.ceil(total / limit) || 1
+        totalPages: Math.ceil(adjustedTotal / limit) || 1
       }
     });
+
   } catch (err: any) {
     console.error("Failed to fetch outbound calls:", err);
     return NextResponse.json({ data: [], meta: { total: 0, page: 1, limit: 10, totalPages: 1 } });
