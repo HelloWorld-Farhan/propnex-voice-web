@@ -250,8 +250,19 @@ export async function GET(req: NextRequest) {
       // The fallbackCustomerNumber was already extracted above (lines 175-189)
 
       // 6. Determine callType
+      // Campaign calls: campaignId set, OR correlationId starts with "camp-"
+      // Lead reactivation calls: correlationId starts with "reactivation-"
+      // 6. Determine callType for all users/companies
+      // - campaign: campaignId is set, OR correlationId starts with "camp-", OR providerCallId does NOT start with "OUT-" (Bonvoice OBD CSV campaign format uses company prefix)
+      // - lead: correlationId starts with "reactivation-"  
+      // - internal: correlationId starts with "pnx" or is a manual platform call (providerCallId starts with "OUT-" but no leadId)
       let callType: "lead" | "campaign" | "internal" = "internal";
-      if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
+      const wh: any = call.providerWebhook || {};
+      const provCallId = call.providerCallId || "";
+      // Bonvoice OBD CSV campaigns: providerCallId doesn't start with "OUT-" (e.g. SCHOOLKNOT-xxx, pnx1234...)  
+      // but providerWebhook.callType === "2" and has a leadId
+      const isBonvoiceOBDCampaign = wh.callType === "2" && call.leadId && !provCallId.startsWith("OUT-") && !provCallId.startsWith("pending-");
+      if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-")) || isBonvoiceOBDCampaign) {
         callType = "campaign";
       } else if (call.correlationId && call.correlationId.startsWith("reactivation-")) {
         callType = "lead";

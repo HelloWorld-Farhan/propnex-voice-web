@@ -78,6 +78,13 @@ export async function GET(req: NextRequest) {
     const whereClause: any = {
       companyId: { in: companyIdsToQuery },
       direction: directionVal,
+      // Exclude inbound calls that came in on a number configured as OUTBOUND-only
+      // (calls with no linked phoneNumber are still shown)
+      ...(directionVal === "INBOUND" ? {
+        NOT: {
+          phoneNumber: { direction: "OUTBOUND" }
+        }
+      } : {}),
     };
 
     // Status filter
@@ -168,6 +175,9 @@ export async function GET(req: NextRequest) {
       companyId: { in: companyIdsToQuery },
       direction: directionVal,
       status: { in: ["RINGING", "ANSWERED", "QUEUED"] },
+      ...(directionVal === "INBOUND" ? {
+        NOT: { phoneNumber: { direction: "OUTBOUND" } }
+      } : {}),
     };
 
     const prismaOrderBy: any = sortBy === "duration"
