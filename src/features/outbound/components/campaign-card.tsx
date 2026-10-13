@@ -205,16 +205,32 @@ export function CampaignCard({
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+            // Clean up any stale or falsely cached "Completed" status on future waves running today
+            const now = new Date();
+            const istMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % (24 * 60);
+            const istDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+
             return parsed.map((item: any) => {
-              if (item.id && item.id < todayStr) {
-                return {
-                  ...item,
-                  q1: { ...item.q1, status: "Completed" },
-                  q2: { ...item.q2, status: "Completed" },
-                  q3: { ...item.q3, status: "Completed" },
-                  overallStatus: "Completed"
-                };
+              if (item.id) {
+                const parts = item.id.split("-").map(Number);
+                if (parts.length === 3) {
+                  // Reactivation day is item.id (failed leads date) + 1 day
+                  const reactDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + 1));
+                  const reactDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(reactDate);
+
+                  // If reactivation is scheduled for TODAY:
+                  if (reactDateStr === istDateStr) {
+                    // Q3 starts at 8:00 PM (1200 mins from midnight). Before 8:00 PM, Q3 cannot be completed unless all leads are completed
+                    const q3Done = item.q3?.failedLeads && item.q3.failedLeads.length > 0 && item.q3.failedLeads.every((l: any) => l.isCompleted);
+                    if (istMinutes < 1200 && !q3Done && item.q3?.status === "Completed") {
+                      return {
+                        ...item,
+                        q3: { ...item.q3, status: "Pending" },
+                        overallStatus: item.q1?.status === "Pending" ? "Pending Q1" : item.q2?.status === "Pending" ? "Pending Q2" : "Pending Q3"
+                      };
+                    }
+                  }
+                }
               }
               return item;
             });

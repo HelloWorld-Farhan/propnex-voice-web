@@ -213,9 +213,22 @@ export async function POST(req: Request) {
           },
         });
       } else {
-        // Filter out OUTBOUND-only numbers for inbound calls
-        let filtered = candidates.filter(p => !isInbound || p.direction !== "OUTBOUND");
-        if (filtered.length === 0) filtered = candidates;
+        // If this is an INBOUND call, ONLY candidates assigned as INBOUND or BOTH are eligible.
+        // If an outbound number of a sub-company or main company is dialed from outside,
+        // and that number is NOT assigned for inbound (direction is OUTBOUND only):
+        // -> do NOT link to the company, do NOT increase inbound total, do NOT charge any credits.
+        let filtered = candidates;
+        if (isInbound) {
+          filtered = candidates.filter(p => {
+            const dir = (p.direction || "").toUpperCase();
+            return dir === "INBOUND" || dir === "BOTH";
+          });
+
+          if (filtered.length === 0) {
+            console.log(`Bonvoice Notification: Inbound call received on OUTBOUND-only number (${didNumber}). Dropping company association - no inbound stats increase and no credit deduction.`);
+            return NextResponse.json({ success: true, message: "Ignored inbound call to outbound-only number" });
+          }
+        }
 
         const activeFiltered = filtered.filter(p => !p.status || p.status === "ACTIVE");
         const pool = activeFiltered.length > 0 ? activeFiltered : filtered;

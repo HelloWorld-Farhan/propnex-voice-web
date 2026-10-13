@@ -206,6 +206,15 @@ export async function POST(req: Request) {
         || existingLogs.find((l: any) => l.companyId)
         || existingLogs[0];
 
+      // Check if this inbound call is on an outbound-only number
+      const phoneDir = (primaryLog?.phoneNumber?.direction || "").toUpperCase();
+      const isOutboundOnlyInbound = isInbound && primaryLog?.phoneNumber && phoneDir !== "INBOUND" && phoneDir !== "BOTH";
+
+      if (isOutboundOnlyInbound) {
+        console.log(`Bonvoice Hangup: Inbound call on outbound-only number detected for log ${primaryLog?.id}. Zeroing credits and detaching company.`);
+        creditsUsed = 0;
+      }
+
       for (const log of existingLogs) {
         let lead: any = null;
         if (!log.leadId && callerCore && log.companyId) {
@@ -221,8 +230,8 @@ export async function POST(req: Request) {
           data: {
             status:          finalMappedStatus as any,
             durationSeconds: durationSec,
-            cost:            isPrimary ? callCost : 0,
-            creditsUsed:     isPrimary ? creditsUsed : 0,
+            cost:            isPrimary && !isOutboundOnlyInbound ? callCost : 0,
+            creditsUsed:     isPrimary && !isOutboundOnlyInbound ? creditsUsed : 0,
             recordingUrl:    recordingUrl || undefined,
             endedAt:         endTimeParsed,
             providerCallId:  String(callID),
@@ -230,16 +239,17 @@ export async function POST(req: Request) {
             providerWebhook: data,
             historicalDidString: log.historicalDidString || didNumber,
             historicalChannels: log.historicalChannels || 1,
+            ...(isOutboundOnlyInbound ? { companyId: null, phoneNumberId: null } : {}),
             ...(lead ? { leadId: lead.id } : {}),
           },
         });
       }
 
-      // Charge credits ONLY ONCE for the primary company
-      if (primaryLog?.companyId && creditsUsed > 0) {
+      // Charge credits ONLY ONCE for the primary company IF NOT outbound-only inbound
+      if (!isOutboundOnlyInbound && primaryLog?.companyId && creditsUsed > 0) {
         logsToCharge.push({ companyId: primaryLog.companyId, callLogId: primaryLog.id });
       }
-      console.log(`Bonvoice Hangup: Updated ${existingLogs.length} call logs → COMPLETED (${durationSec}s), charged single company=${primaryLog?.companyId}`);
+      console.log(`Bonvoice Hangup: Updated ${existingLogs.length} call logs → COMPLETED (${durationSec}s), charged single company=${isOutboundOnlyInbound ? "NONE" : primaryLog?.companyId}`);
     } else {
       // 3b. Create SINGLE NEW COMPLETED call log (if notification webhook was missed)
       const candidates = await prisma.phoneNumber.findMany({
@@ -272,8 +282,20 @@ export async function POST(req: Request) {
         });
       } else {
         // Pick SINGLE target candidate
-        let filtered = candidates.filter(p => !isInbound || p.direction !== "OUTBOUND");
-        if (filtered.length === 0) filtered = candidates;
+        // If this is an INBOUND call, ONLY candidates assigned as INBOUND or BOTH are eligible.
+        // If outbound-only: do NOT link to company, do NOT charge credits, do NOT increment inbound count.
+        let filtered = candidates;
+        if (isInbound) {
+          filtered = candidates.filter(p => {
+            const dir = (p.direction || "").toUpperCase();
+            return dir === "INBOUND" || dir === "BOTH";
+          });
+
+          if (filtered.length === 0) {
+            console.log(`Bonvoice Hangup: Inbound call received on OUTBOUND-only number (${didNumber}). Dropping company association (no credit deduction, no inbound count increase).`);
+            return NextResponse.json({ success: true, message: "Ignored inbound call on outbound-only number" });
+          }
+        }
 
         const activeFiltered = filtered.filter(p => !p.status || p.status === "ACTIVE");
         const pool = activeFiltered.length > 0 ? activeFiltered : filtered;
