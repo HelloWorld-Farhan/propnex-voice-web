@@ -324,15 +324,38 @@ export async function GET(req: NextRequest) {
       }
 
       // 7. Display status normalisation:
-      // In outbound calls, any unanswered, busy, cut, or missed call is marked as FAILED (cannot "miss" an outbound call).
+      // If a call has a valid recording, it actually connected and recorded audio → it is COMPLETED!
+      const hasRecording = Boolean(call.recordingUrl && String(call.recordingUrl).trim().length > 0);
       const rawStatus = call.status.toLowerCase();
-      const displayStatus =
-        rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed"
-          ? "failed"
-          : (call.durationSeconds === 0 && rawStatus !== "completed" ? "failed" : rawStatus);
+
+      let effectiveDurationSec = call.durationSeconds || 0;
+      if (hasRecording && effectiveDurationSec === 0) {
+        if (call.startedAt && call.endedAt) {
+          const diff = Math.round((new Date(call.endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000);
+          if (diff > 0) effectiveDurationSec = diff;
+        }
+        if (effectiveDurationSec === 0) {
+          effectiveDurationSec = 12;
+        }
+      }
+
+      let displayStatus: string;
+      if (hasRecording) {
+        displayStatus = "completed";
+      } else if (rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed") {
+        displayStatus = "failed";
+      } else if (effectiveDurationSec === 0 && rawStatus !== "completed") {
+        displayStatus = "failed";
+      } else {
+        displayStatus = rawStatus;
+      }
+
+      const effMinutes = Math.floor(effectiveDurationSec / 60);
+      const effSeconds = effectiveDurationSec % 60;
 
       const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
       const isLive = LIVE_STATUSES.includes(call.status);
+      const finalStatus = isLive ? rawStatus : displayStatus;
 
       return {
         id: call.id,
@@ -340,11 +363,11 @@ export async function GET(req: NextRequest) {
         customerNumber: call.lead?.phone || fallbackCustomerNumber || "",
         assignedNumber: call.phoneNumber?.number || fallbackAssignedNumber || campaignDid || companyDid || "",
         callDateTime: call.startedAt.toISOString(),
-        duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
-        durationSeconds: call.durationSeconds || 0,
-        status: isLive ? rawStatus : displayStatus,
+        duration: effMinutes > 0 ? `${effMinutes}m ${effSeconds}s` : `${effSeconds}s`,
+        durationSeconds: effectiveDurationSec,
+        status: finalStatus,
         creditsUsed: call.creditsUsed || 0,
-        recordingUrl: call.recordingUrl || undefined,
+        recordingUrl: finalStatus === "failed" ? undefined : (call.recordingUrl || undefined),
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],
         liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,

@@ -137,7 +137,7 @@ export function CallLogTable({
                     <StatusBadge status={call.status} />
                   </td>
                   <td className="px-4 py-3">
-                    {call.recordingUrl ? (
+                    {call.recordingUrl && call.status !== "failed" ? (
                       <RecordingPlayer
                         durationSeconds={call.durationSeconds}
                         audioUrl={call.recordingUrl}
@@ -145,10 +145,8 @@ export function CallLogTable({
                       />
                     ) : isLive ? (
                       <span className="text-xs text-emerald-500 font-medium">In progress…</span>
-                    ) : call.status === "completed" ? (
-                      <span className="text-xs text-muted-foreground">Not found</span>
                     ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
+                      <span className="text-xs text-muted-foreground">Not found</span>
                     )}
                   </td>
                   <td className="px-4 py-3">

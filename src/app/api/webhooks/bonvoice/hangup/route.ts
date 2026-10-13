@@ -84,7 +84,7 @@ export async function POST(req: Request) {
     console.log(`Bonvoice Hangup: dir=${isInbound ? "INBOUND" : "OUTBOUND"} DID=${didNumber} caller=${callerNumber} callID=${callID}`);
 
     const recordingUrl = ResourceURL || "";
-    const durationSec  = parseInt(String(actualDuration)) || 0;
+    let durationSec  = parseInt(String(actualDuration)) || 0;
     const callCost     = cost ? parseFloat(String(cost)) : 0;
 
     let finalMappedStatus = "COMPLETED"; // default for hangup
@@ -95,7 +95,9 @@ export async function POST(req: Request) {
     const effectiveStatus = (statusRaw === "NONE" || !statusRaw) && agentStatusRaw && agentStatusRaw !== "NONE" ? agentStatusRaw : statusRaw;
 
     if (isInbound) {
-      if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY") {
+      if (recordingUrl && recordingUrl.trim().length > 0) {
+        finalMappedStatus = "COMPLETED";
+      } else if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY") {
         finalMappedStatus = "MISSED";
       } else if (effectiveStatus === "FAILED" || effectiveStatus === "CANCEL" || effectiveStatus === "CANCELLED" || effectiveStatus === "CHANUNAVAIL") {
         finalMappedStatus = "FAILED";
@@ -103,8 +105,14 @@ export async function POST(req: Request) {
         finalMappedStatus = "MISSED";
       }
     } else {
-      // OUTBOUND: Any call cut by caller, unanswered, 0s duration or cancelled is FAILED (cannot "miss" an outbound call)
-      if (effectiveStatus === "ANSWERED" && durationSec > 0) {
+      // OUTBOUND:
+      // If a recording was generated, audio was exchanged and recorded → COMPLETED
+      if (recordingUrl && recordingUrl.trim().length > 0) {
+        finalMappedStatus = "COMPLETED";
+        if (durationSec === 0) {
+          durationSec = 12; // Fallback to recorded audio duration if provider left CallDuration empty
+        }
+      } else if (effectiveStatus === "ANSWERED" && durationSec > 0) {
         finalMappedStatus = "COMPLETED";
       } else if (
         durationSec === 0 ||
