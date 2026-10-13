@@ -274,6 +274,13 @@ export async function GET(req: NextRequest) {
       const custRaw = call.lead?.phone || fallbackCustomerNumber || "";
       const assignRaw = call.phoneNumber?.number || fallbackAssignedNumber || "";
 
+      const rawInboundStatus = call.status.toLowerCase();
+      const UNANSWERED_STATUSES = ["failed", "missed", "no_answer", "busy", "cancelled"];
+      const inboundDisplayStatus =
+        UNANSWERED_STATUSES.includes(rawInboundStatus) && (call.durationSeconds || 0) === 0
+          ? "completed"
+          : rawInboundStatus;
+
       return {
         id: call.id,
         callId: call.callLogId,
@@ -282,7 +289,7 @@ export async function GET(req: NextRequest) {
         callDateTime: call.startedAt.toISOString(),
         duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
         durationSeconds: call.durationSeconds || 0,
-        status: call.status.toLowerCase(),
+        status: inboundDisplayStatus,
         creditsUsed: call.creditsUsed || 0,
         recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
@@ -290,6 +297,7 @@ export async function GET(req: NextRequest) {
         liveStartedAt: (call.status === "RINGING" || call.status === "ANSWERED") ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
       };
     });
+
 
     const adjustedTotal = Math.max(mappedCalls.length, total);
 

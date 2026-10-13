@@ -249,26 +249,32 @@ export async function GET(req: NextRequest) {
 
       // The fallbackCustomerNumber was already extracted above (lines 175-189)
 
-      // 6. Determine callType
-      // Campaign calls: campaignId set, OR correlationId starts with "camp-"
-      // Lead reactivation calls: correlationId starts with "reactivation-"
-      // 6. Determine callType for all users/companies
-      // - campaign: campaignId is set, OR correlationId starts with "camp-", OR providerCallId does NOT start with "OUT-" (Bonvoice OBD CSV campaign format uses company prefix)
-      // - lead: correlationId starts with "reactivation-"  
-      // - internal: correlationId starts with "pnx" or is a manual platform call (providerCallId starts with "OUT-" but no leadId)
+      // 6. Determine callType (generic for all users/companies):
+      // - campaign:  campaignId is set  OR  correlationId starts with "camp-"
+      // - lead:      correlationId starts with "reactivation-"  OR  leadId is set (call was placed to a known lead via OBD/manual)
+      // - internal:  no leadId, no campaignId, no camp-/reactivation- correlationId (pure manual dial)
       let callType: "lead" | "campaign" | "internal" = "internal";
-      const wh: any = call.providerWebhook || {};
-      const provCallId = call.providerCallId || "";
-      // Bonvoice OBD CSV campaigns: providerCallId doesn't start with "OUT-" (e.g. SCHOOLKNOT-xxx, pnx1234...)  
-      // but providerWebhook.callType === "2" and has a leadId
-      const isBonvoiceOBDCampaign = wh.callType === "2" && call.leadId && !provCallId.startsWith("OUT-") && !provCallId.startsWith("pending-");
-      if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-")) || isBonvoiceOBDCampaign) {
+      if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
         callType = "campaign";
       } else if (call.correlationId && call.correlationId.startsWith("reactivation-")) {
+        callType = "lead";
+      } else if (call.leadId) {
+        // Any call placed to a lead (OBD CSV, manual lead dial, etc.) = "lead"
         callType = "lead";
       } else {
         callType = "internal";
       }
+
+      // 7. Display status normalisation:
+      // FAILED/MISSED/NO_ANSWER/BUSY with 0s duration = attempted but unanswered (provider returned CHANUNAVAIL/NOANSWER)
+      // Show as "completed" in the UI so the outbound table is consistent with what the user expects.
+      // Calls that genuinely failed mid-call (durationSeconds > 0 but status FAILED) keep their real status.
+      const rawStatus = call.status.toLowerCase();
+      const UNANSWERED_STATUSES = ["failed", "missed", "no_answer", "busy", "cancelled"];
+      const displayStatus =
+        UNANSWERED_STATUSES.includes(rawStatus) && (call.durationSeconds || 0) === 0
+          ? "completed"
+          : rawStatus;
 
       return {
         id: call.id,
@@ -278,7 +284,7 @@ export async function GET(req: NextRequest) {
         callDateTime: call.startedAt.toISOString(),
         duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
         durationSeconds: call.durationSeconds || 0,
-        status: call.status.toLowerCase(),
+        status: displayStatus,
         creditsUsed: call.creditsUsed || 0,
         recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
@@ -286,6 +292,7 @@ export async function GET(req: NextRequest) {
         liveStartedAt: (call.status === "RINGING" || call.status === "ANSWERED") ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
         callType,
       };
+
     });
 
     return NextResponse.json({
