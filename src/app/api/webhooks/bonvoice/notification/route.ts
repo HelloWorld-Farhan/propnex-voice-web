@@ -88,7 +88,11 @@ export async function POST(req: Request) {
     // Determine direction
     // Bonvoice: Direction = "Inbound" | "OutBound" | "Outbound" | "inbound"
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
-    const isInbound = directionRaw === "" || directionRaw === "inbound";
+    // Only treat as inbound if Direction is EXPLICITLY inbound.
+    // If Direction is missing/empty, treat as OUTBOUND to avoid silently dropping
+    // external outbound calls (e.g. via Postman / third-party API) on outbound-only numbers.
+    const isInbound = directionRaw === "inbound";
+    const isDirectionExplicit = directionRaw !== "";
 
     // Clean up "None" strings that Bonvoice sends for missing fields
     const cleanNum = (v: string) => (v && v.toLowerCase() !== "none" ? v : "");
@@ -217,8 +221,12 @@ export async function POST(req: Request) {
         // If an outbound number of a sub-company or main company is dialed from outside,
         // and that number is NOT assigned for inbound (direction is OUTBOUND only):
         // -> do NOT link to the company, do NOT increase inbound total, do NOT charge any credits.
+        //
+        // IMPORTANT: Only apply this filter when direction is EXPLICITLY "inbound".
+        // If direction is unknown/missing (e.g. external outbound call via Postman/API that omits Direction),
+        // we must NOT drop the call — it should still be recorded as an outbound internal call.
         let filtered = candidates;
-        if (isInbound) {
+        if (isInbound && isDirectionExplicit) {
           filtered = candidates.filter(p => {
             const dir = (p.direction || "").toUpperCase();
             return dir === "INBOUND" || dir === "BOTH";

@@ -59,7 +59,11 @@ export async function POST(req: Request) {
 
     // Determine direction
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
-    const isInbound = directionRaw === "" || directionRaw === "inbound";
+    // Only treat as inbound if Direction is EXPLICITLY "inbound".
+    // If Direction is missing/empty, treat as OUTBOUND so external outbound calls
+    // (via Postman / third-party API) on outbound-only numbers are not silently dropped.
+    const isInbound = directionRaw === "inbound";
+    const isDirectionExplicit = directionRaw !== "";
 
     // Clean up "None" strings that Bonvoice sends for missing fields
     const cleanNum = (v: string) => (v && v.toLowerCase() !== "none" ? v : "");
@@ -206,9 +210,11 @@ export async function POST(req: Request) {
         || existingLogs.find((l: any) => l.companyId)
         || existingLogs[0];
 
-      // Check if this inbound call is on an outbound-only number
+      // Check if this inbound call is on an outbound-only number.
+      // ONLY apply when direction is explicitly inbound — don't drop outbound calls
+      // that have no Direction field (e.g. external calls via Postman/API).
       const phoneDir = (primaryLog?.phoneNumber?.direction || "").toUpperCase();
-      const isOutboundOnlyInbound = isInbound && primaryLog?.phoneNumber && phoneDir !== "INBOUND" && phoneDir !== "BOTH";
+      const isOutboundOnlyInbound = isInbound && isDirectionExplicit && primaryLog?.phoneNumber && phoneDir !== "INBOUND" && phoneDir !== "BOTH";
 
       if (isOutboundOnlyInbound) {
         console.log(`Bonvoice Hangup: Inbound call on outbound-only number detected for log ${primaryLog?.id}. Zeroing credits and detaching company.`);
@@ -284,8 +290,10 @@ export async function POST(req: Request) {
         // Pick SINGLE target candidate
         // If this is an INBOUND call, ONLY candidates assigned as INBOUND or BOTH are eligible.
         // If outbound-only: do NOT link to company, do NOT charge credits, do NOT increment inbound count.
+        // ONLY apply this filter when direction is EXPLICITLY inbound \u2014 don't drop external
+        // outbound calls (via Postman/API) that omit the Direction field.
         let filtered = candidates;
-        if (isInbound) {
+        if (isInbound && isDirectionExplicit) {
           filtered = candidates.filter(p => {
             const dir = (p.direction || "").toUpperCase();
             return dir === "INBOUND" || dir === "BOTH";
