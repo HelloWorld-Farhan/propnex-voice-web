@@ -70,18 +70,33 @@ export async function GET(req: NextRequest) {
     const minDuration = searchParams.get("minDuration");
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
-    const sortBy = searchParams.get("sortBy") || "date";
-    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+    const sortBy = searchParams.get("sortBy") || "duration";
+    const sortOrder = (searchParams.get("sortOrder") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+    const directionParam = searchParams.get("direction");
+    const directionVal = directionParam?.toUpperCase() === "OUTBOUND" ? "OUTBOUND" : "INBOUND";
 
     const whereClause: any = {
       companyId: { in: companyIdsToQuery },
-      direction: "INBOUND",
+      direction: directionVal,
     };
 
     // Status filter
     const statusParam = searchParams.get("status");
-    if (statusParam && statusParam !== "all") {
-      whereClause.status = statusParam.toUpperCase();
+    if (statusParam && statusParam.toLowerCase() !== "all") {
+      const s = statusParam.toUpperCase();
+      if (s === "COMPLETED") {
+        whereClause.status = "COMPLETED";
+      } else if (s === "FAILED") {
+        whereClause.status = { in: ["FAILED", "CANCELLED"] };
+      } else if (s === "MISSED") {
+        whereClause.status = { in: ["MISSED", "NO_ANSWER", "BUSY", "VOICEMAIL"] };
+      } else if (s === "RINGING") {
+        whereClause.status = { in: ["RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] };
+      } else if (s === "ANSWERED") {
+        whereClause.status = "ANSWERED";
+      } else {
+        whereClause.status = s;
+      }
     }
 
     console.log("INBOUND_API: searchParams received:", {
@@ -91,7 +106,9 @@ export async function GET(req: NextRequest) {
       minDuration,
       durationUnit,
       sortBy,
-      sortOrder
+      sortOrder,
+      status: statusParam,
+      direction: directionVal
     });
 
     if (assignedNumber) {
@@ -145,11 +162,11 @@ export async function GET(req: NextRequest) {
 
     console.log("INBOUND_API: whereClause is:", JSON.stringify(whereClause, null, 2));
 
-    // Always also fetch RINGING/ANSWERED live calls for the same companies,
-    // then merge + deduplicate so live calls always appear regardless of status filter.
+    // Only include ringing/answered live calls when viewing "all", "ringing", or "answered"
+    const shouldIncludeLive = !statusParam || statusParam === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
     const liveWhereClause: any = {
       companyId: { in: companyIdsToQuery },
-      direction: "INBOUND",
+      direction: directionVal,
       status: { in: ["RINGING", "ANSWERED", "QUEUED"] },
     };
 
@@ -166,13 +183,14 @@ export async function GET(req: NextRequest) {
         take: limit,
         include: { phoneNumber: true, lead: true },
       }),
-      // Always fetch live calls so they appear even if filtered out
-      prisma.callLog.findMany({
-        where: liveWhereClause,
-        orderBy: { startedAt: "desc" },
-        take: 10,
-        include: { phoneNumber: true, lead: true },
-      }),
+      shouldIncludeLive
+        ? prisma.callLog.findMany({
+            where: liveWhereClause,
+            orderBy: { startedAt: "desc" },
+            take: 10,
+            include: { phoneNumber: true, lead: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     // Helper to extract a unique call key across parent and subcompany records

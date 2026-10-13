@@ -43,6 +43,12 @@ export function CallLogFiltersBar({
     setLocalFilters((prev) => ({ ...prev, ...patch }));
   };
 
+  const updateImmediate = (patch: Partial<CallLogFilters>) => {
+    const next = { ...localFilters, ...patch };
+    setLocalFilters(next);
+    onChange(next);
+  };
+
   const handleSearch = () => {
     onChange(localFilters);
   };
@@ -110,6 +116,7 @@ export function CallLogFiltersBar({
                 placeholder="Filter assigned..."
                 value={localFilters.assignedNumber}
                 onChange={(e) => update({ assignedNumber: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
                 className="pl-10"
                 disabled={loading}
               />
@@ -131,6 +138,7 @@ export function CallLogFiltersBar({
               placeholder="Filter caller..."
               value={localFilters.callerNumber}
               onChange={(e) => update({ callerNumber: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
               className="pl-10"
               disabled={loading}
             />
@@ -141,7 +149,7 @@ export function CallLogFiltersBar({
           label="Status"
           value={localFilters.status}
           onChange={(e) =>
-            update({
+            updateImmediate({
               status: e.target.value as CallLogFilters["status"],
             })
           }
@@ -166,6 +174,7 @@ export function CallLogFiltersBar({
             type="date"
             value={localFilters.dateFrom}
             onChange={(e) => update({ dateFrom: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
             disabled={loading}
           />
         </div>
@@ -182,6 +191,7 @@ export function CallLogFiltersBar({
             type="date"
             value={localFilters.dateTo}
             onChange={(e) => update({ dateTo: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
             disabled={loading}
           />
         </div>
@@ -202,6 +212,7 @@ export function CallLogFiltersBar({
               placeholder="e.g. 2"
               value={localFilters.minDuration}
               onChange={(e) => update({ minDuration: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
               disabled={loading}
             />
           </div>
@@ -209,7 +220,7 @@ export function CallLogFiltersBar({
             label="Unit"
             value={localFilters.durationUnit}
             onChange={(e) =>
-              update({
+              updateImmediate({
                 durationUnit: e.target.value as "sec" | "min",
               })
             }
@@ -225,28 +236,28 @@ export function CallLogFiltersBar({
           label="Sort By"
           value={localFilters.sortBy}
           onChange={(e) =>
-            update({
+            updateImmediate({
               sortBy: e.target.value as "date" | "duration",
             })
           }
           disabled={loading}
         >
-          <option value="date">Call Date</option>
           <option value="duration">Call Duration</option>
+          <option value="date">Call Date</option>
         </SelectField>
 
         <SelectField
           label="Order"
           value={localFilters.sortOrder}
           onChange={(e) =>
-            update({
+            updateImmediate({
               sortOrder: e.target.value as "desc" | "asc",
             })
           }
           disabled={loading}
         >
-          <option value="desc">Descending (High to Low / Newest)</option>
           <option value="asc">Ascending (Low to High / Oldest)</option>
+          <option value="desc">Descending (High to Low / Newest)</option>
         </SelectField>
       </div>
     </div>

@@ -301,7 +301,7 @@ export function useInboundCallsApi(
       loading: state.loading,
       error: state.error,
     };
-  }, [state, search, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit]);
+  }, [state, search, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder]);
 
   return processedState;
 }

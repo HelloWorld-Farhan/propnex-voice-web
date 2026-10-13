@@ -73,11 +73,32 @@ export async function GET(req: NextRequest) {
     const minDuration = searchParams.get("minDuration");
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
-    const sortBy = searchParams.get("sortBy") || "date";
-    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+    const statusParam = searchParams.get("status");
+    const sortBy = searchParams.get("sortBy") || "duration";
+    const sortOrder = (searchParams.get("sortOrder") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
 
-    const getWhereClause = (cId: string) => {
-      const whereClause: any = { companyId: cId, direction: "OUTBOUND" };
+    const getWhereClause = () => {
+      const whereClause: any = {
+        companyId: { in: companyIdsToQuery },
+        direction: "OUTBOUND",
+      };
+
+      if (statusParam && statusParam.toLowerCase() !== "all") {
+        const s = statusParam.toUpperCase();
+        if (s === "COMPLETED") {
+          whereClause.status = "COMPLETED";
+        } else if (s === "FAILED") {
+          whereClause.status = { in: ["FAILED", "CANCELLED"] };
+        } else if (s === "MISSED") {
+          whereClause.status = { in: ["MISSED", "NO_ANSWER", "BUSY", "VOICEMAIL"] };
+        } else if (s === "RINGING") {
+          whereClause.status = { in: ["RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] };
+        } else if (s === "ANSWERED") {
+          whereClause.status = "ANSWERED";
+        } else {
+          whereClause.status = s;
+        }
+      }
 
       if (assignedNumber) {
         const core = getCoreNumber(assignedNumber);
@@ -130,34 +151,37 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Hide failed/missed/0s calls IF they are Lead Reactivation calls
-      whereClause.NOT = {
-        AND: [
-          { correlationId: { isSet: true } },
-          { correlationId: { startsWith: "reactivation-" } },
-          {
-            OR: [
-              { status: { not: "COMPLETED" } },
-              { durationSeconds: 0 }
-            ]
-          }
-        ]
-      };
+      // Hide failed/missed/0s calls IF they are Lead Reactivation calls, unless user specifically filtered for failed/missed
+      if (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toUpperCase() === "COMPLETED") {
+        whereClause.NOT = {
+          AND: [
+            { correlationId: { isSet: true } },
+            { correlationId: { startsWith: "reactivation-" } },
+            {
+              OR: [
+                { status: { not: "COMPLETED" } },
+                { durationSeconds: 0 }
+              ]
+            }
+          ]
+        };
+      }
 
       return whereClause;
     };
 
-    // Fetch skip + limit from EACH company to guarantee correct global sorting and pagination
-    const fetchLimit = skip + limit;
+    const whereClause = getWhereClause();
     const prismaOrderBy: any = sortBy === "duration"
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
     
-    const promises = companyIdsToQuery.map(cId => 
+    const [total, calls] = await Promise.all([
+      prisma.callLog.count({ where: whereClause }),
       prisma.callLog.findMany({
-        where: getWhereClause(cId),
+        where: whereClause,
         orderBy: prismaOrderBy,
-        take: fetchLimit,
+        skip,
+        take: limit,
         include: { 
           phoneNumber: true, 
           lead: true,
@@ -165,23 +189,9 @@ export async function GET(req: NextRequest) {
           company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } }
         }
       })
-    );
+    ]);
     
-    const results = await Promise.all(promises);
-    
-    // Merge, sort globally by requested sortBy/sortOrder, and then paginate
-    const allCalls = results.flat().sort((a, b) => {
-      if (sortBy === "duration") {
-        const durA = a.durationSeconds || 0;
-        const durB = b.durationSeconds || 0;
-        return sortOrder === "asc" ? durA - durB : durB - durA;
-      }
-      const timeA = new Date(a.startedAt).getTime();
-      const timeB = new Date(b.startedAt).getTime();
-      return sortOrder === "asc" ? timeA - timeB : timeB - timeA;
-    });
-    
-    const mappedCalls = allCalls.slice(skip, skip + limit).map(call => {
+    const mappedCalls = calls.map(call => {
       const minutes = Math.floor((call.durationSeconds || 0) / 60);
       const seconds = (call.durationSeconds || 0) % 60;
       
@@ -266,13 +276,6 @@ export async function GET(req: NextRequest) {
         callType,
       };
     });
-
-    let total = 0;
-    const countPromises = companyIdsToQuery.map(cId => 
-      prisma.callLog.count({ where: getWhereClause(cId) })
-    );
-    const counts = await Promise.all(countPromises);
-    total = counts.reduce((sum, current) => sum + current, 0);
 
     return NextResponse.json({
       data: mappedCalls,

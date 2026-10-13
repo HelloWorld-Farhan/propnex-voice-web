@@ -5,24 +5,6 @@ import { DEFAULT_CALL_FILTERS, type CallLogFilters, type CallRecord } from "@/ty
 import { useUserContext } from "@/features/auth/context/user-context";
 
 const OUTBOUND_PAGE_SIZE = 8;
-const getOutboundCache = () => {
-  if (typeof window === "undefined") return {};
-  try {
-    const stored = sessionStorage.getItem("outboundCache");
-    if (stored) return JSON.parse(stored);
-  } catch {}
-  return {};
-};
-
-const outboundCache: Record<string, any> = getOutboundCache();
-
-const saveOutboundCache = () => {
-  if (typeof window !== "undefined") {
-    try {
-      sessionStorage.setItem("outboundCache", JSON.stringify(outboundCache));
-    } catch {}
-  }
-};
 
 export function useOutboundCalls() {
   const { user } = useUserContext();
@@ -38,19 +20,8 @@ export function useOutboundCalls() {
   const fetchCalls = useCallback(async (isBackground = false) => {
     if (!user?.companyId) return;
     
-    const cacheKey = `${user.companyId}-${page}-${JSON.stringify(filters)}`;
-    
     if (!isBackground) {
-      if (outboundCache[cacheKey]) {
-        // Optimistic UI from cache for tab switching and pagination
-        setCalls(outboundCache[cacheKey].calls);
-        setTotalCalls(outboundCache[cacheKey].total);
-        setTotalPages(outboundCache[cacheKey].pages);
-        setLoading(false); // don't show skeleton if we have cache
-      } else {
-        // Keep previous calls while fetching to prevent UI flashing
-        if (calls.length === 0) setLoading(true);
-      }
+      setLoading(true);
     }
     
     setError(null);
@@ -84,17 +55,13 @@ export function useOutboundCalls() {
       const newTotal = data.meta?.total || 0;
       const newPages = data.meta?.totalPages || 1;
 
-      // Update cache
-      outboundCache[cacheKey] = { calls: newCalls, total: newTotal, pages: newPages };
-      saveOutboundCache();
-
       setCalls(newCalls);
       setTotalCalls(newTotal);
       setTotalPages(newPages);
     } catch (err: any) {
       setError(err.message);
     } finally {
-      if (!isBackground || !outboundCache[cacheKey]) {
+      if (!isBackground) {
         setLoading(false);
       }
     }

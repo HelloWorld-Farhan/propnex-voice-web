@@ -48,8 +48,8 @@ export const DEFAULT_CALL_FILTERS: CallLogFilters = {
   callerNumber: "",
   minDuration: "",
   durationUnit: "sec",
-  sortBy: "date",
-  sortOrder: "desc",
+  sortBy: "duration",
+  sortOrder: "asc",
 };
 
 export const CALL_STATUS_OPTIONS: { value: CallStatus | "all"; label: string }[] =
