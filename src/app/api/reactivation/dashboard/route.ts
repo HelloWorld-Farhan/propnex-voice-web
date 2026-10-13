@@ -78,6 +78,8 @@ export async function GET(req: NextRequest) {
         leadId: true,
         campaignId: true,
         correlationId: true,
+        providerCallId: true,
+        providerWebhook: true,
         status: true,
         durationSeconds: true,
         lead: {
@@ -230,10 +232,17 @@ export async function GET(req: NextRequest) {
           }
         }
 
+        // Determine original call type generically for all companies:
+        // Campaign: has campaignId OR correlationId starts with 'camp-' OR is Bonvoice OBD (leadId + no OUT-prefix providerCallId)
+        // Lead: has leadId but no campaignId and no camp- correlationId (manual lead call)
+        // Internal: everything else (manual dial without lead or campaign)
+        const wh: any = (call as any).providerWebhook || {};
+        const pCId = (call as any).providerCallId || "";
+        const isBonvoiceOBD = wh.callType === "2" && call.leadId && !pCId.startsWith("OUT-") && !pCId.startsWith("pending-");
         const originalCallType =
-          call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))
+          call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-")) || isBonvoiceOBD
             ? "Campaign"
-            : call.leadId && !call.campaignId && !call.correlationId
+            : call.leadId && !call.campaignId
               ? "Lead"
               : "Internal";
 
@@ -353,16 +362,18 @@ export async function GET(req: NextRequest) {
         const q1LogStatus = (q1Log?.status || "").toUpperCase();
         const completedInQ1 = q1LogStatus === "COMPLETED" && (q1Log?.durationSeconds || 0) > 0;
         const q1LogAgeMs = q1Log?.startedAt ? (nowMs - new Date(q1Log.startedAt).getTime()) : 0;
-        const q1IsStalePending = !!q1Log && PENDING_STATUSES.includes(q1LogStatus) && q1LogAgeMs > 5 * 60 * 1000;
+        // Stale: pending for more than 15 minutes (was 5 min — too aggressive, killed live calls)
+        const q1IsStalePending = !!q1Log && PENDING_STATUSES.includes(q1LogStatus) && q1LogAgeMs > 15 * 60 * 1000;
         if (q1IsStalePending && q1Log?.id) {
           prisma.callLog.update({ where: { id: q1Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
         }
         const isRingingInQ1 = !completedInQ1 && !isPastDay && !!q1Log && PENDING_STATUSES.includes(q1LogStatus) && !q1IsStalePending;
 
-        // At or after 2:30 PM cutoff (or past day): any lead not completed is marked FAILED for Wave 1
+        // At or after 2:30 PM cutoff (or past day): ONLY leads that were ATTEMPTED but not completed = FAILED
+        // Unattempted leads (no q1Log) remain Pending even after cutoff
         const isPastQ1Cutoff = isPastDay || (nowMs >= b.q1CutoffTime.getTime());
         const failedInQ1 = isPastQ1Cutoff
-          ? !completedInQ1
+          ? (!!q1Log && !completedInQ1)  // only attempted-but-not-completed = FAILED
           : (!completedInQ1 && !isRingingInQ1 && (q1IsStalePending || (!!q1Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q1LogStatus))));
 
         const leadQ1Data = {
@@ -380,16 +391,16 @@ export async function GET(req: NextRequest) {
           const q2LogStatus = (q2Log?.status || "").toUpperCase();
           const completedInQ2 = q2LogStatus === "COMPLETED" && (q2Log?.durationSeconds || 0) > 0;
           const q2LogAgeMs = q2Log?.startedAt ? (nowMs - new Date(q2Log.startedAt).getTime()) : 0;
-          const q2IsStalePending = !!q2Log && PENDING_STATUSES.includes(q2LogStatus) && q2LogAgeMs > 5 * 60 * 1000;
+          const q2IsStalePending = !!q2Log && PENDING_STATUSES.includes(q2LogStatus) && q2LogAgeMs > 15 * 60 * 1000;
           if (q2IsStalePending && q2Log?.id) {
             prisma.callLog.update({ where: { id: q2Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
           }
           const isRingingInQ2 = !completedInQ2 && !isPastDay && !!q2Log && PENDING_STATUSES.includes(q2LogStatus) && !q2IsStalePending;
 
-          // At or after 7:30 PM cutoff (or past day): any lead not completed is marked FAILED for Wave 2
+          // At or after 7:30 PM cutoff (or past day): ONLY attempted-but-not-completed leads = FAILED
           const isPastQ2Cutoff = isPastDay || (nowMs >= b.q2CutoffTime.getTime());
           const failedInQ2 = isPastQ2Cutoff
-            ? !completedInQ2
+            ? (!!q2Log && !completedInQ2)  // only attempted-but-not-completed = FAILED
             : (!completedInQ2 && !isRingingInQ2 && (q2IsStalePending || (!!q2Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q2LogStatus))));
 
           const leadQ2Data = {
@@ -407,13 +418,14 @@ export async function GET(req: NextRequest) {
             const q3LogStatus = (q3Log?.status || "").toUpperCase();
             const completedInQ3 = q3LogStatus === "COMPLETED" && (q3Log?.durationSeconds || 0) > 0;
             const q3LogAgeMs = q3Log?.startedAt ? (nowMs - new Date(q3Log.startedAt).getTime()) : 0;
-            const q3IsStalePending = !!q3Log && PENDING_STATUSES.includes(q3LogStatus) && q3LogAgeMs > 5 * 60 * 1000;
+            const q3IsStalePending = !!q3Log && PENDING_STATUSES.includes(q3LogStatus) && q3LogAgeMs > 15 * 60 * 1000;
             if (q3IsStalePending && q3Log?.id) {
               prisma.callLog.update({ where: { id: q3Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
             }
             const isRingingInQ3 = !completedInQ3 && !isPastQ3Cutoff && !!q3Log && PENDING_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
+            // ONLY attempted-but-not-completed leads = FAILED at cutoff
             const failedInQ3 = isPastQ3Cutoff
-              ? !completedInQ3
+              ? (!!q3Log && !completedInQ3)
               : (!completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (!!q3Log && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus))));
 
             const leadQ3Data = {
