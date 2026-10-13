@@ -94,12 +94,31 @@ export async function POST(req: Request) {
     const agentStatusRaw = (data.AgentStatus || data.agent_status || "").toString().toUpperCase().trim();
     const effectiveStatus = (statusRaw === "NONE" || !statusRaw) && agentStatusRaw && agentStatusRaw !== "NONE" ? agentStatusRaw : statusRaw;
 
-    if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY") {
-      finalMappedStatus = "MISSED";
-    } else if (effectiveStatus === "FAILED" || effectiveStatus === "CANCEL" || effectiveStatus === "CANCELLED" || effectiveStatus === "CHANUNAVAIL") {
-      finalMappedStatus = "FAILED";
-    } else if (durationSec === 0) {
-      finalMappedStatus = "FAILED";
+    if (isInbound) {
+      if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY") {
+        finalMappedStatus = "MISSED";
+      } else if (effectiveStatus === "FAILED" || effectiveStatus === "CANCEL" || effectiveStatus === "CANCELLED" || effectiveStatus === "CHANUNAVAIL") {
+        finalMappedStatus = "FAILED";
+      } else if (durationSec === 0) {
+        finalMappedStatus = "MISSED";
+      }
+    } else {
+      // OUTBOUND: Any call cut by caller, unanswered, 0s duration or cancelled is FAILED (cannot "miss" an outbound call)
+      if (effectiveStatus === "ANSWERED" && durationSec > 0) {
+        finalMappedStatus = "COMPLETED";
+      } else if (
+        durationSec === 0 ||
+        effectiveStatus === "NO ANSWER" ||
+        effectiveStatus === "NOANSWER" ||
+        effectiveStatus === "NO_ANSWER" ||
+        effectiveStatus === "BUSY" ||
+        effectiveStatus === "CANCEL" ||
+        effectiveStatus === "CANCELLED" ||
+        effectiveStatus === "FAILED" ||
+        effectiveStatus === "CHANUNAVAIL"
+      ) {
+        finalMappedStatus = "FAILED";
+      }
     }
 
     // Credit calculation: 1.75 credits per 30s block for all calls
@@ -223,7 +242,7 @@ export async function POST(req: Request) {
 
       for (const log of existingLogs) {
         let lead: any = null;
-        if (!log.leadId && callerCore && log.companyId) {
+        if (isInbound && !log.leadId && callerCore && log.companyId) {
           lead = await prisma.lead.findFirst({
             where: { companyId: log.companyId, phone: { contains: callerCore } }
           });
@@ -324,7 +343,7 @@ export async function POST(req: Request) {
         }
 
         let lead: any = null;
-        if (callerCore && targetPhoneNumber.companyId) {
+        if (isInbound && callerCore && targetPhoneNumber.companyId) {
           lead = await prisma.lead.findFirst({
             where: { companyId: targetPhoneNumber.companyId, phone: { contains: callerCore } },
           });

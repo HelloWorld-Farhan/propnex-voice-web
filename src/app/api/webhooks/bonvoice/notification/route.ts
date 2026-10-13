@@ -261,7 +261,9 @@ export async function POST(req: Request) {
         }
 
         let lead: any = null;
-        if (callerCore && targetPhoneNumber.companyId) {
+        // Only link leads automatically for INBOUND calls. Outbound calls initiated outside the platform (e.g. Postman)
+        // should NOT auto-link leads by phone number match so they remain classified as INTERNAL calls.
+        if (isInbound && callerCore && targetPhoneNumber.companyId) {
           lead = await prisma.lead.findFirst({
             where: {
               companyId: targetPhoneNumber.companyId,

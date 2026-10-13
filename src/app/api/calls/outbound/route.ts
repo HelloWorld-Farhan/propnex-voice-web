@@ -313,6 +313,9 @@ export async function GET(req: NextRequest) {
         callType = "campaign";
       } else if (call.correlationId && call.correlationId.startsWith("reactivation-")) {
         callType = "lead";
+      } else if (call.publicId?.startsWith("bonvoice-") || (call.callLogId?.startsWith("CL") && !call.campaignId && !call.correlationId)) {
+        // Created dynamically from Bonvoice notification/hangup webhook without platform campaign/reactivation = internal call
+        callType = "internal";
       } else if (call.leadId) {
         // Any call placed to a lead (OBD CSV, manual lead dial, etc.) = "lead"
         callType = "lead";
@@ -321,14 +324,12 @@ export async function GET(req: NextRequest) {
       }
 
       // 7. Display status normalisation:
-      // FAILED/MISSED/NO_ANSWER/BUSY with 0s duration = attempted but unanswered (provider returned CHANUNAVAIL/NOANSWER)
-      // Show as "completed" in the UI so the outbound table is consistent with what the user expects.
-      // Calls that genuinely failed mid-call (durationSeconds > 0 but status FAILED) keep their real status.
+      // In outbound calls, any unanswered, busy, cut, or missed call is marked as FAILED (cannot "miss" an outbound call).
       const rawStatus = call.status.toLowerCase();
       const displayStatus =
-        rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer"
-          ? "missed"
-          : rawStatus;
+        rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed"
+          ? "failed"
+          : (call.durationSeconds === 0 && rawStatus !== "completed" ? "failed" : rawStatus);
 
       const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
       const isLive = LIVE_STATUSES.includes(call.status);

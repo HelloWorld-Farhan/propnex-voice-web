@@ -41,8 +41,13 @@ export async function GET(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
     const totalLength = buffer.length;
     let contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
-    // Safari strictly rejects audio playback if Content-Type is application/octet-stream
-    if (contentType.includes("application/octet-stream") || contentType.includes("text/html") || contentType.includes("application/json")) {
+    // Safari and HTML5 audio strictly expect audio/mpeg for MP3 files
+    if (
+      contentType.includes("application/octet-stream") ||
+      contentType.includes("text/html") ||
+      contentType.includes("application/json") ||
+      contentType.includes("audio/mp3")
+    ) {
       contentType = "audio/mpeg";
     }
 

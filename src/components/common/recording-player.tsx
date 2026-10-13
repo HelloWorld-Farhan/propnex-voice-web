@@ -59,12 +59,16 @@ export function RecordingPlayer({
     return () => window.removeEventListener("recording-play", handleGlobalPlay);
   }, [audioUrl, isPlaying]);
 
+  const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
   const [retryCount, setRetryCount] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const durationRef = useRef(durationSeconds);
   
   useEffect(() => {
     durationRef.current = durationSeconds;
+    if (durationSeconds > 0) {
+      setMediaDuration(durationSeconds);
+    }
   }, [durationSeconds]);
 
   // Initialize the audio element when the URL is available
@@ -81,24 +85,27 @@ export function RecordingPlayer({
     const buster = (retryCount > 0 || reloadKey > 0) ? (proxyUrl.includes('?') ? `&_t=${Date.now()}` : `?_t=${Date.now()}`) : '';
     const audio = new Audio(proxyUrl + buster);
     
-    // If we already know this recording exists, don't proactively load it
-    const isAlreadyOk = typeof window !== 'undefined' && localStorage.getItem(`rec_ok_${audioUrl}`) === 'true';
-    if (isAlreadyOk && retryCount === 0 && reloadKey === 0) {
-      audio.preload = "none";
-    } else {
-      audio.preload = "metadata";
-      audio.load();
-    }
+    // Always load metadata so audio duration and stream readiness are known
+    audio.preload = "metadata";
+    audio.load();
     
     audioRef.current = audio;
 
+    const syncDuration = () => {
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
+        setMediaDuration(Math.round(audio.duration));
+      }
+    };
+
     const updateTime = () => {
       setProgress(audio.currentTime);
+      syncDuration();
     };
 
     const handleEnded = () => {
       setIsPlaying(false);
-      setProgress(durationRef.current > 0 ? durationRef.current : audio.duration || 0);
+      const finalDur = durationRef.current > 0 ? durationRef.current : (audio.duration || 0);
+      setProgress(finalDur > 0 ? finalDur : 0);
     };
 
     const handleError = () => {
@@ -123,6 +130,7 @@ export function RecordingPlayer({
 
     const handleLoadedMetadata = () => {
       if (!isMounted) return;
+      syncDuration();
       setHasError(false);
       setIsValidating(false);
       if (typeof window !== 'undefined') {
@@ -131,7 +139,8 @@ export function RecordingPlayer({
       }
     };
 
-    if (audio.readyState >= 1 || isAlreadyOk) {
+    if (audio.readyState >= 1) {
+      syncDuration();
       setIsValidating(false);
     }
 
@@ -139,6 +148,7 @@ export function RecordingPlayer({
     audio.addEventListener("ended", handleEnded);
     audio.addEventListener("error", handleError);
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("durationchange", handleLoadedMetadata);
     audio.addEventListener("canplay", handleLoadedMetadata);
 
     return () => {
@@ -147,11 +157,14 @@ export function RecordingPlayer({
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("error", handleError);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("durationchange", handleLoadedMetadata);
       audio.removeEventListener("canplay", handleLoadedMetadata);
       audio.pause();
       audioRef.current = null;
     };
   }, [audioUrl, retryCount, reloadKey]);
+
+  const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : (audioRef.current?.duration || 0));
 
   const handleToggle = () => {
     if (!audioRef.current) {
@@ -165,24 +178,29 @@ export function RecordingPlayer({
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      if (audioRef.current.readyState === 0) {
+        audioRef.current.load();
+      }
       // If we finished, restart
-      if (progress >= durationSeconds && durationSeconds > 0) {
+      if (currentDuration > 0 && progress >= currentDuration) {
         audioRef.current.currentTime = 0;
+        setProgress(0);
       }
       audioRef.current.play().then(() => {
         setIsPlaying(true);
+        if (audioRef.current && audioRef.current.duration && !isNaN(audioRef.current.duration) && isFinite(audioRef.current.duration)) {
+          setMediaDuration(Math.round(audioRef.current.duration));
+        }
         // Dispatch event so other players pause
         window.dispatchEvent(new CustomEvent("recording-play", { detail: audioUrl }));
       }).catch(err => {
         console.error("Failed to play audio:", err);
-        if (err.name !== "NotAllowedError") {
+        if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
           setHasError(true);
         }
       });
     }
   };
-
-  const currentDuration = durationSeconds > 0 ? durationSeconds : (audioRef.current?.duration || 0);
   const progressPercent = currentDuration > 0 ? (progress / currentDuration) * 100 : 0;
 
   if (compact) {
