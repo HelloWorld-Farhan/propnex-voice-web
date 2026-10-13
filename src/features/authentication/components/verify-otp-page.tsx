@@ -72,6 +72,13 @@ export function VerifyOtpPageContent() {
     }
   }, [cooldown]);
 
+  function handleOtpChange(newOtp: string) {
+    setOtp(newOtp);
+    if (message) {
+      setMessage("");
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (otp.length < 6) {
@@ -108,17 +115,19 @@ export function VerifyOtpPageContent() {
         if (!res.ok) { setMessage(data.message || "Invalid OTP"); return; }
 
         const rememberMe = localStorage.getItem("login_remember_me");
-        if (rememberMe === "true") {
-          // Store trust as { email, trustedAt } so server can verify it was granted AFTER any force-logout
+        if (rememberMe === "true" || localStorage.getItem("trusted_emails")) {
+          // Store trust as { email, trustedAt } so future logins bypass OTP
           let trusted: { email: string; trustedAt: string }[] = [];
           try { trusted = JSON.parse(localStorage.getItem("trusted_devices") || "[]"); } catch {}
-          trusted = trusted.filter(t => t.email !== email); // remove old entry for this email
-          trusted.push({ email, trustedAt: new Date().toISOString() });
+          trusted = trusted.filter(t => t.email.toLowerCase() !== email.toLowerCase());
+          trusted.push({ email: email.toLowerCase(), trustedAt: new Date().toISOString() });
           localStorage.setItem("trusted_devices", JSON.stringify(trusted));
-          // Keep legacy trusted_emails for backward compat
+
           let trustedEmails: string[] = [];
           try { trustedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]"); } catch {}
-          if (!trustedEmails.includes(email)) trustedEmails.push(email);
+          if (!trustedEmails.includes(email.toLowerCase())) {
+            trustedEmails.push(email.toLowerCase());
+          }
           localStorage.setItem("trusted_emails", JSON.stringify(trustedEmails));
         }
         localStorage.setItem("accessToken", data.accessToken);
@@ -203,6 +212,7 @@ export function VerifyOtpPageContent() {
       title={copy.title}
       welcomeTitle="Verify OTP"
       welcomeText="OTP verification is required for email verification and password reset. Codes expire after 10 minutes."
+      cardClassName="min-h-[480px] sm:min-h-[500px] flex flex-col justify-between"
     >
       <form className="space-y-6" onSubmit={handleSubmit}>
 
@@ -261,13 +271,19 @@ export function VerifyOtpPageContent() {
           </p>
         </div>
 
-        <OtpInput value={otp} onChange={setOtp} />
+        <OtpInput
+          value={otp}
+          onChange={handleOtpChange}
+          hasError={Boolean(message && !message.includes("resent") && !message.includes("verified"))}
+        />
 
-        {message && (
-          <p className={`text-center text-xs ${message.includes("resent") || message.includes("verified") ? "text-emerald-400" : "text-red-400"}`}>
-            {message}
-          </p>
-        )}
+        <div className="min-h-[20px] flex items-center justify-center">
+          {message && (
+            <p className={`text-center text-xs transition-opacity duration-200 ${message.includes("resent") || message.includes("verified") ? "text-emerald-400" : "text-red-400"}`}>
+              {message}
+            </p>
+          )}
+        </div>
 
         <button type="submit" className="auth-btn-primary" disabled={loading}>
           {loading ? "Verifying..." : "Verify OTP"}

@@ -20,22 +20,41 @@ export function SignInPageContent() {
   const [emailValue, setEmailValue] = useState("");
   const [trustedEmails, setTrustedEmails] = useState<string[]>([]);
 
-  // Load trusted emails on mount
+  // Load trusted emails & devices on mount
   useEffect(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
-      setTrustedEmails(stored);
+      const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
+      const storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
+      const deviceEmails = storedDevices.map((d: any) => (d.email || "").toLowerCase());
+      const combined = Array.from(new Set([...storedEmails.map((e: string) => e.toLowerCase()), ...deviceEmails]));
+      setTrustedEmails(combined);
     } catch (e) {}
   }, []);
 
-  const isCurrentEmailTrusted = trustedEmails.includes(emailValue.toLowerCase());
+  const isCurrentEmailTrusted = trustedEmails.includes(emailValue.toLowerCase().trim());
+
+  function handleForgetDevice(email: string) {
+    const clean = email.toLowerCase().trim();
+    try {
+      const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
+      const filteredEmails = storedEmails.filter((e: string) => e.toLowerCase() !== clean);
+      localStorage.setItem("trusted_emails", JSON.stringify(filteredEmails));
+
+      const storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
+      const filteredDevices = storedDevices.filter((d: any) => (d.email || "").toLowerCase() !== clean);
+      localStorage.setItem("trusted_devices", JSON.stringify(filteredDevices));
+
+      setTrustedEmails(filteredEmails.map((e: string) => e.toLowerCase()));
+      setRememberMe(false);
+    } catch {}
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setErrors({});
     
     const formData = new FormData(e.currentTarget);
-    const email = (formData.get("email") as string).toLowerCase();
+    const email = (formData.get("email") as string).toLowerCase().trim();
     const password = formData.get("password") as string;
 
     const newErrors: Record<string, string> = {};
@@ -54,15 +73,15 @@ export function SignInPageContent() {
     setSubmitting(true);
 
     try {
-      const isTrusted = isCurrentEmailTrusted;
+      const isTrusted = isCurrentEmailTrusted || rememberMe;
 
-      // Get the timestamp when this device was trusted (from trusted_devices)
-      let trustedAt: string | null = null;
-      if (isTrusted) {
+      // Get timestamp of trust
+      let trustedAt: string = new Date().toISOString();
+      if (isCurrentEmailTrusted) {
         try {
           const devices: { email: string; trustedAt: string }[] = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
-          const device = devices.find(d => d.email === email.toLowerCase());
-          trustedAt = device?.trustedAt || null;
+          const device = devices.find(d => (d.email || "").toLowerCase() === email);
+          if (device?.trustedAt) trustedAt = device.trustedAt;
         } catch {}
       }
 
@@ -70,7 +89,7 @@ export function SignInPageContent() {
         email,
         password,
         trusted: isTrusted,
-        trustedAt,   // ISO timestamp — server verifies this is AFTER any force-logout
+        trustedAt,
         domainUrl: window.location.origin,
       });
 
@@ -78,7 +97,7 @@ export function SignInPageContent() {
 
       if (data.requireOtp) {
         localStorage.setItem("login_email", email);
-        if (rememberMe) {
+        if (rememberMe || isCurrentEmailTrusted) {
           localStorage.setItem("login_remember_me", "true");
         } else {
           localStorage.removeItem("login_remember_me");
@@ -91,6 +110,21 @@ export function SignInPageContent() {
       localStorage.setItem("accessToken", data.accessToken);
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
+
+      // If user selected rememberMe or was already trusted, ensure it is stored
+      if (isTrusted) {
+        try {
+          const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
+          if (!storedEmails.map((e: string) => e.toLowerCase()).includes(email)) {
+            storedEmails.push(email);
+            localStorage.setItem("trusted_emails", JSON.stringify(storedEmails));
+          }
+          let storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
+          storedDevices = storedDevices.filter((d: any) => (d.email || "").toLowerCase() !== email);
+          storedDevices.push({ email, trustedAt: new Date().toISOString() });
+          localStorage.setItem("trusted_devices", JSON.stringify(storedDevices));
+        } catch {}
+      }
 
       router.replace(AUTH_ROUTES.dashboard);
     } catch (err: any) {
@@ -108,7 +142,10 @@ export function SignInPageContent() {
   }
 
   return (
-    <AuthShell title="Login">
+    <AuthShell
+      title="Login"
+      cardClassName="min-h-[480px] sm:min-h-[500px] flex flex-col justify-between"
+    >
       <form className="space-y-4" onSubmit={handleSubmit} noValidate>
         <AuthField
           label="Email address"
@@ -119,7 +156,10 @@ export function SignInPageContent() {
           disabled={submitting}
           required
           value={emailValue}
-          onChange={(e: any) => setEmailValue(e.target.value)}
+          onChange={(e: any) => {
+            setEmailValue(e.target.value);
+            if (errors.email || errors.root) setErrors((prev) => ({ ...prev, email: "", root: "" }));
+          }}
           error={errors.email}
         />
 
@@ -131,6 +171,9 @@ export function SignInPageContent() {
           autoComplete="current-password"
           disabled={submitting}
           error={errors.password}
+          onChange={() => {
+            if (errors.password || errors.root) setErrors((prev) => ({ ...prev, password: "", root: "" }));
+          }}
           required
         />
 
@@ -191,9 +234,21 @@ export function SignInPageContent() {
         )}
 
         {isCurrentEmailTrusted && (
-          <div className="flex items-center gap-2 text-sm text-fuchsia-400">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-            Device remembered for this email
+          <div className="flex items-center justify-between text-xs text-fuchsia-400 bg-fuchsia-500/[0.08] border border-fuchsia-500/30 rounded-xl p-3 transition-all">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="font-medium text-white/90">Device remembered for this email</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleForgetDevice(emailValue)}
+              className="text-[11px] text-white/50 hover:text-white/90 underline transition cursor-pointer"
+              title="Forget this device"
+            >
+              Forget
+            </button>
           </div>
         )}
 

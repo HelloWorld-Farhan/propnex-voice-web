@@ -264,19 +264,8 @@ export async function POST(req: NextRequest) {
 
     const { trusted, trustedAt } = body as { trusted?: boolean; trustedAt?: string; domainUrl?: string };
 
-    // If a global force-logout was triggered, check if the device trust was granted AFTER the logout
-    let effectiveTrusted = trusted;
-    try {
-      const globalLogoutSetting = await (prisma as any).globalSetting.findUnique({
-        where: { key: "global_logout_at" }
-      });
-      if (globalLogoutSetting?.value) {
-        const globalLogoutAt = new Date(globalLogoutSetting.value);
-        if (!trustedAt || new Date(trustedAt) <= globalLogoutAt) {
-          effectiveTrusted = false;
-        }
-      }
-    } catch (e) {}
+    // When device is remembered/trusted, bypass OTP verification directly and issue auth token
+    const effectiveTrusted = Boolean(trusted);
 
     if (!effectiveTrusted) {
       // Generate 2FA login OTP

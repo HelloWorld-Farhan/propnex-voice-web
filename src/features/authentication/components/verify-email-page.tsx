@@ -15,6 +15,13 @@ export function VerifyEmailPageContent() {
   const [otp, setOtp] = useState("");
   const [message, setMessage] = useState("");
 
+  function handleOtpChange(newOtp: string) {
+    setOtp(newOtp);
+    if (message) {
+      setMessage("");
+    }
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim()) {
@@ -42,6 +49,7 @@ export function VerifyEmailPageContent() {
       title="Verify Email"
       welcomeTitle="Almost there!"
       welcomeText="Enter your email and the verification OTP we sent you to activate your account."
+      cardClassName="min-h-[460px] sm:min-h-[480px] flex flex-col justify-between"
     >
       <form className="space-y-6" onSubmit={handleSubmit}>
         <AuthField
@@ -51,7 +59,10 @@ export function VerifyEmailPageContent() {
           placeholder="Email address"
           autoComplete="email"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (message) setMessage("");
+          }}
           required
         />
 
@@ -59,12 +70,18 @@ export function VerifyEmailPageContent() {
           <p className="text-center text-xs leading-relaxed text-white/60">
             Enter the 6-digit OTP sent to your email address.
           </p>
-          <OtpInput value={otp} onChange={setOtp} />
+          <OtpInput
+            value={otp}
+            onChange={handleOtpChange}
+            hasError={Boolean(message && !message.includes("sent"))}
+          />
         </div>
 
-        {message && (
-          <p className="text-center text-xs text-fuchsia-300">{message}</p>
-        )}
+        <div className="min-h-[20px] flex items-center justify-center">
+          {message && (
+            <p className="text-center text-xs text-fuchsia-300">{message}</p>
+          )}
+        </div>
 
         <button type="submit" className="auth-btn-primary">
           Verify Email

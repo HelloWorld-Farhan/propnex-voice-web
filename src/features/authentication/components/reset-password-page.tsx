@@ -7,6 +7,10 @@ import { useState } from "react";
 import { AuthField } from "@/features/authentication/components/auth-field";
 import { AuthShell } from "@/features/authentication/components/auth-shell";
 import { AUTH_ROUTES } from "@/features/authentication/types";
+import {
+  PasswordRequirements,
+  getPasswordChecks,
+} from "@/features/authentication/components/password-requirements";
 
 type ResetStep = "email" | "new-password";
 
@@ -26,18 +30,7 @@ export function ResetPasswordPageContent() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const checks = {
-    length: newPassword.length >= 8,
-    upper: /[A-Z]/.test(newPassword),
-    lower: /[a-z]/.test(newPassword),
-    number: /\d/.test(newPassword),
-    symbol: /[\W_]/.test(newPassword),
-  };
-  const passedCount = Object.values(checks).filter(Boolean).length;
-  const isStrong = passedCount === 5;
-  const strengthLabel = passedCount <= 2 ? "Weak" : passedCount === 3 ? "Fair" : passedCount === 4 ? "Good" : "Strong \u2713";
-  const strengthColor = passedCount <= 2 ? "text-red-400" : passedCount === 3 ? "text-amber-400" : passedCount === 4 ? "text-yellow-300" : "text-emerald-400";
-  const barColor = passedCount <= 2 ? "bg-red-500" : passedCount === 3 ? "bg-amber-500" : passedCount === 4 ? "bg-yellow-400" : "bg-emerald-400";
+  const { checks, passedCount, isStrong } = getPasswordChecks(newPassword);
 
   async function handleEmailSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -138,10 +131,11 @@ export function ResetPasswordPageContent() {
         title="Reset Password"
         welcomeTitle="Set a new password"
         welcomeText="Your OTP has been verified. Enter a strong new password for your account."
+        cardClassName="min-h-[500px] sm:min-h-[530px] flex flex-col justify-between"
       >
         <form className="space-y-4" onSubmit={handlePasswordSubmit}>
-          {/* New password + live strength meter */}
-          <div className="space-y-2">
+          {/* New password + animated smooth criteria (No page height jump) */}
+          <div>
             <AuthField
               label="New password"
               name="newPassword"
@@ -151,48 +145,20 @@ export function ResetPasswordPageContent() {
               required
               disabled={loading}
               value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
+              onChange={(e) => {
+                setNewPassword(e.target.value);
+                if (message) setMessage("");
+              }}
             />
-            {newPassword.length > 0 && (
-              <div style={{ borderRadius: "1rem", border: "1px solid rgba(217,70,239,0.25)", background: "rgba(217,70,239,0.05)", padding: "0.85rem 1.25rem" }} className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="flex gap-1 flex-1">
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div
-                        key={i}
-                        className={`h-1 flex-1 rounded-full transition-all duration-300 ${passedCount >= i ? barColor : "bg-white/10"}`}
-                      />
-                    ))}
-                  </div>
-                  <span className={`text-xs font-semibold shrink-0 ${strengthColor}`}>{strengthLabel}</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 pt-0.5">
-                  {[
-                    { key: "length", label: "8+ characters" },
-                    { key: "upper",  label: "Uppercase (A\u2013Z)" },
-                    { key: "lower",  label: "Lowercase (a\u2013z)" },
-                    { key: "number", label: "Number (0\u20139)" },
-                    { key: "symbol", label: "Symbol (!@#$...)" },
-                  ].map(({ key, label }) => {
-                    const ok = (checks as any)[key];
-                    return (
-                      <div key={key} className={`flex items-center gap-1.5 text-[11px] transition-colors ${ok ? "text-emerald-400" : "text-white/35"}`}>
-                        {ok ? (
-                          <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                        ) : (
-                          <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9" /></svg>
-                        )}
-                        {label}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <PasswordRequirements
+              checks={checks}
+              passedCount={passedCount}
+              visible={newPassword.length > 0}
+            />
           </div>
 
-          {/* Confirm password */}
-          <div className="space-y-1">
+          {/* Confirm password with smooth match indicator */}
+          <div>
             <AuthField
               label="Confirm new password"
               name="confirmPassword"
@@ -202,23 +168,48 @@ export function ResetPasswordPageContent() {
               required
               disabled={loading}
               value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                if (message) setMessage("");
+              }}
             />
-            {newPassword && confirmPassword && (
-              <div className="flex justify-center pt-1">
-                {newPassword === confirmPassword ? (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-medium text-emerald-400">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                    Passwords match
-                  </div>
-                ) : (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-[11px] font-medium text-red-400">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                    Passwords do not match
-                  </div>
-                )}
-              </div>
-            )}
+            <div
+              className={`transition-all duration-200 ease-in-out overflow-hidden flex justify-center ${
+                newPassword && confirmPassword
+                  ? "max-h-8 opacity-100 mt-1"
+                  : "max-h-0 opacity-0 mt-0 pointer-events-none"
+              }`}
+            >
+              {newPassword === confirmPassword ? (
+                <div
+                  style={{
+                    borderRadius: "9999px",
+                    border: "1px solid rgba(16,185,129,0.3)",
+                    background: "rgba(16,185,129,0.07)",
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-0.5 text-[11px] font-medium text-emerald-400"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  Passwords match
+                </div>
+              ) : (
+                <div
+                  style={{
+                    borderRadius: "9999px",
+                    border: "1px solid rgba(239,68,68,0.3)",
+                    background: "rgba(239,68,68,0.07)",
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-0.5 text-[11px] font-medium text-red-400"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Passwords do not match
+                </div>
+              )}
+            </div>
           </div>
 
           {message && (
@@ -244,6 +235,7 @@ export function ResetPasswordPageContent() {
       title="Reset Password"
       welcomeTitle="Forgot password?"
       welcomeText="Enter your registered email address. We will send a password-reset OTP to verify your identity."
+      cardClassName="min-h-[460px] sm:min-h-[490px] flex flex-col justify-between"
     >
       <form className="space-y-4" onSubmit={handleEmailSubmit}>
         <AuthField
@@ -255,16 +247,28 @@ export function ResetPasswordPageContent() {
           required
           disabled={loading}
           error={emailError}
+          onChange={() => {
+            if (emailError) setEmailError("");
+            if (message) setMessage("");
+          }}
         />
 
         <div
           role="button"
           tabIndex={0}
-          onClick={() => !loading && setConfirmChange(!confirmChange)}
+          onClick={() => {
+            if (!loading) {
+              setConfirmChange(!confirmChange);
+              if (message) setMessage("");
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              if (!loading) setConfirmChange(!confirmChange);
+              if (!loading) {
+                setConfirmChange(!confirmChange);
+                if (message) setMessage("");
+              }
             }
           }}
           className={`group relative flex cursor-pointer items-start gap-3.5 rounded-xl border p-3.5 transition-all duration-200 select-none ${
