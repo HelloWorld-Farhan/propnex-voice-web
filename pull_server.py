@@ -1,10 +1,13 @@
 import paramiko
 import sys
 
+import os
+
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 try:
-    ssh.connect('200.234.34.240', username='root', password='Propnexai@123', timeout=10)
+    vps_pass = os.environ.get('VPS_PASSWORD', '')
+    ssh.connect('200.234.34.240', username='root', password=vps_pass, timeout=10)
     
     commands = [
         "cd /root/propnex-voice-web && git rebase --abort",

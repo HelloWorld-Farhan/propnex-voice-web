@@ -318,7 +318,7 @@ export default function WhiteLabelSetupPage() {
                     </div>
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-zinc-400 font-medium">Value (Target):</span>
-                      <span className="text-cyan-400 font-mono bg-cyan-500/10 px-2 py-0.5 rounded">cname.vercel-dns.com</span>
+                      <span className="text-cyan-400 font-mono bg-cyan-500/10 px-2 py-0.5 rounded">cname.propnexai.com</span>
                     </div>
                   </div>
                   <p className="text-xs text-zinc-500 mt-4 flex items-center gap-1.5">

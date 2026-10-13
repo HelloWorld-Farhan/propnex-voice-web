@@ -155,7 +155,7 @@ export async function POST(req: Request) {
             correlationId: true,
           },
           orderBy: { startedAt: "desc" },
-          take: 2000, // Reduced from 10000 to prevent Vercel 502 OOM/Timeout
+          take: 2000,
         });
 
         const subCompanyIds = subcompanies.map((s: any) => s.id);
@@ -169,7 +169,7 @@ export async function POST(req: Request) {
                 campaignId: true, isRetry: true, leadId: true,
                 providerWebhook: true, correlationId: true,
               },
-              take: 1000, // Reduced from 5000 to prevent Vercel 502 OOM/Timeout
+              take: 1000,
             })
           : [];
 

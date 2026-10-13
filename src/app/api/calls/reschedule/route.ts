@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 // Use the same internal backend URL that next.config.ts uses for its fallback rewrite.
-// NEXT_PUBLIC_API_URL is a *relative* /api path for client-side use and cannot be used
-// in server-side fetch. The public hostname (api.propnexai.com) is unreachable from
-// Vercel's serverless environment. We proxy to the raw IP instead.
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://YOUR_SERVER_IP:3001";
+// NEXT_PUBLIC_API_URL is a relative /api path for client-side use.
+// On server-side fetch, we target the internal backend directly.
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://200.234.34.240:3001";
 
 /**
  * POST /api/calls/reschedule

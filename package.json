@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "echo 'Linting disabled during Vercel builds'"
+    "lint": "next lint"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
