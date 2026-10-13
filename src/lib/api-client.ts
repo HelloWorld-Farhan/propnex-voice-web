@@ -61,6 +61,8 @@ export type CallListParams = {
   dateTo?: string;
   minDuration?: string;
   durationUnit?: "sec" | "min";
+  sortBy?: "date" | "duration";
+  sortOrder?: "desc" | "asc";
 };
 
 export async function fetchInboundCalls(
@@ -80,6 +82,8 @@ export async function fetchInboundCalls(
   if (params.dateTo) query.set("dateTo", params.dateTo);
   if (params.minDuration) query.set("minDuration", params.minDuration);
   if (params.durationUnit) query.set("durationUnit", params.durationUnit);
+  if (params.sortBy) query.set("sortBy", params.sortBy);
+  if (params.sortOrder) query.set("sortOrder", params.sortOrder);
 
   let token = "";
   let companyId = params.companyId || "";

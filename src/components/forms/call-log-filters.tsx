@@ -55,7 +55,9 @@ export function CallLogFiltersBar({
     filters.assignedNumber !== DEFAULT_CALL_FILTERS.assignedNumber ||
     filters.callerNumber !== DEFAULT_CALL_FILTERS.callerNumber ||
     filters.minDuration !== DEFAULT_CALL_FILTERS.minDuration ||
-    filters.durationUnit !== DEFAULT_CALL_FILTERS.durationUnit;
+    filters.durationUnit !== DEFAULT_CALL_FILTERS.durationUnit ||
+    filters.sortBy !== DEFAULT_CALL_FILTERS.sortBy ||
+    filters.sortOrder !== DEFAULT_CALL_FILTERS.sortOrder;
 
   return (
     <div className={cn("glass-card rounded-2xl p-4", className)}>
@@ -218,6 +220,34 @@ export function CallLogFiltersBar({
             <option value="min">Min</option>
           </SelectField>
         </div>
+
+        <SelectField
+          label="Sort By"
+          value={localFilters.sortBy}
+          onChange={(e) =>
+            update({
+              sortBy: e.target.value as "date" | "duration",
+            })
+          }
+          disabled={loading}
+        >
+          <option value="date">Call Date</option>
+          <option value="duration">Call Duration</option>
+        </SelectField>
+
+        <SelectField
+          label="Order"
+          value={localFilters.sortOrder}
+          onChange={(e) =>
+            update({
+              sortOrder: e.target.value as "desc" | "asc",
+            })
+          }
+          disabled={loading}
+        >
+          <option value="desc">Descending (High to Low / Newest)</option>
+          <option value="asc">Ascending (Low to High / Oldest)</option>
+        </SelectField>
       </div>
     </div>
   );

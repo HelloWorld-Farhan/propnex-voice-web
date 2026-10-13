@@ -70,6 +70,8 @@ export async function GET(req: NextRequest) {
     const minDuration = searchParams.get("minDuration");
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
+    const sortBy = searchParams.get("sortBy") || "date";
+    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
 
     const whereClause: any = {
       companyId: { in: companyIdsToQuery },
@@ -87,7 +89,9 @@ export async function GET(req: NextRequest) {
       callerNumber,
       search,
       minDuration,
-      durationUnit
+      durationUnit,
+      sortBy,
+      sortOrder
     });
 
     if (assignedNumber) {
@@ -149,11 +153,15 @@ export async function GET(req: NextRequest) {
       status: { in: ["RINGING", "ANSWERED", "QUEUED"] },
     };
 
+    const prismaOrderBy: any = sortBy === "duration"
+      ? { durationSeconds: sortOrder }
+      : { startedAt: sortOrder };
+
     const [total, calls, liveCalls] = await Promise.all([
       prisma.callLog.count({ where: whereClause }),
       prisma.callLog.findMany({
         where: whereClause,
-        orderBy: { startedAt: "desc" },
+        orderBy: prismaOrderBy,
         skip,
         take: limit,
         include: { phoneNumber: true, lead: true },

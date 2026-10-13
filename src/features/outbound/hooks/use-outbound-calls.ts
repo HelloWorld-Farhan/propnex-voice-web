@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { CallLogFilters, CallRecord } from "@/types/call";
+import { DEFAULT_CALL_FILTERS, type CallLogFilters, type CallRecord } from "@/types/call";
 import { useUserContext } from "@/features/auth/context/user-context";
 
 const OUTBOUND_PAGE_SIZE = 8;
@@ -26,16 +26,7 @@ const saveOutboundCache = () => {
 
 export function useOutboundCalls() {
   const { user } = useUserContext();
-  const [filters, setFilters] = useState<CallLogFilters>({
-    search: "",
-    status: "all",
-    dateFrom: "",
-    dateTo: "",
-    assignedNumber: "",
-    callerNumber: "",
-    minDuration: "",
-    durationUnit: "sec",
-  });
+  const [filters, setFilters] = useState<CallLogFilters>(DEFAULT_CALL_FILTERS);
   
   const [page, setPage] = useState(1);
   const [calls, setCalls] = useState<CallRecord[]>([]);
@@ -75,7 +66,12 @@ export function useOutboundCalls() {
       if (filters.dateFrom) query.set("dateFrom", filters.dateFrom);
       if (filters.dateTo) query.set("dateTo", filters.dateTo);
       if (filters.search) query.set("search", filters.search);
-      if (filters.minDuration) query.set("minDuration", filters.minDuration);
+      if (filters.minDuration) {
+        query.set("minDuration", filters.minDuration);
+        query.set("durationUnit", filters.durationUnit || "sec");
+      }
+      if (filters.sortBy) query.set("sortBy", filters.sortBy);
+      if (filters.sortOrder) query.set("sortOrder", filters.sortOrder);
 
       const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
       const res = await fetch(`/api/calls/outbound?${query.toString()}`, {
@@ -118,7 +114,7 @@ export function useOutboundCalls() {
   return {
     filters,
     updateFilters: (next: CallLogFilters) => { setFilters(next); setPage(1); },
-    resetFilters: () => { setFilters({ search: "", status: "all", dateFrom: "", dateTo: "", assignedNumber: "", callerNumber: "", minDuration: "", durationUnit: "sec" }); setPage(1); },
+    resetFilters: () => { setFilters(DEFAULT_CALL_FILTERS); setPage(1); },
     calls,
     totalCalls,
     page,

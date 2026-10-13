@@ -1234,10 +1234,13 @@ export function CampaignCard({
                           };
 
                           const sortedLeads = [...filteredLeads].sort((a: any, b: any) => getLeadScore(b, wave.data.status) - getLeadScore(a, wave.data.status));
+                          const ringingLeads = sortedLeads.filter((l: any) => isLeadRinging(l));
+                          const nonRingingLeads = sortedLeads.filter((l: any) => !isLeadRinging(l));
+
                           const currentPage = wavePages[`${activeHist.id}-${wave.stage}`] || 1;
                           const itemsPerPage = 10;
-                          const totalPages = Math.max(1, Math.ceil(sortedLeads.length / itemsPerPage));
-                          const paginatedLeads = sortedLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+                          const totalPages = Math.max(1, Math.ceil(nonRingingLeads.length / itemsPerPage));
+                          const paginatedLeads = nonRingingLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
 
                           const processedCount = filteredLeads.filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
@@ -1319,6 +1322,45 @@ export function CampaignCard({
                                 </div>
                               ) : (
                                 <div className="space-y-1.5 pb-2">
+                                  {/* ── Ringing / Calling Now Leads (Always Pinned at Very Top) ── */}
+                                  {ringingLeads.map((lead: any, rIdx: number) => (
+                                    <div 
+                                      key={`ringing-${rIdx}`} 
+                                      className="flex flex-col gap-1.5 text-xs border-2 border-sky-400 bg-sky-500/15 pb-3 pt-3 px-3.5 rounded-xl shadow-[0_0_20px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/40 animate-pulse relative overflow-hidden mb-2"
+                                    >
+                                      <div className="flex items-start justify-between w-full gap-2">
+                                        <div className="flex items-start gap-2.5 flex-1">
+                                          <div className="mt-1 shrink-0">
+                                            <PhoneOutgoing className="size-4 text-sky-400 animate-bounce" />
+                                          </div>
+                                          <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-[10px] uppercase font-bold text-sky-300 tracking-wider">
+                                                RINGING NOW (ACTIVE CALL)
+                                              </span>
+                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-sky-500/30 text-white border border-sky-400 animate-pulse">
+                                                LIVE
+                                              </span>
+                                            </div>
+                                            <span className="font-extrabold text-[14px] text-white tracking-wide break-all drop-shadow-md">
+                                              {lead.phone}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 bg-sky-500/30 text-sky-200 border border-sky-400/40 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1"></span>
+                                          Ringing
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-col items-center justify-center w-full mt-1.5 text-xs font-semibold py-2 px-3 rounded-lg border border-sky-500/40 bg-sky-500/20 text-sky-100 text-center shadow-inner">
+                                        <span>
+                                          📞 Calling Now... Name - {lead.name || "Unknown"}, DID Number - {lead.didNumber !== "Unknown" ? lead.didNumber : (activeHist.didNumber || "Unknown")}, Ch - {lead.channels || activeHist.channels || 1}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+
+                                  {/* ── Paginated Other Leads ── */}
                                   {paginatedLeads.map((lead: any, i: number) => {
                                     const isFailed = lead.isFailed || (wave.data.status === "Completed" && !lead.isCompleted);
                                     const isRinging = isLeadRinging(lead);

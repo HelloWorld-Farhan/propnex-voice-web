@@ -156,7 +156,7 @@ export function useInboundCallsApi(
   companyId?: string,
   direction?: "inbound" | "outbound"
 ): UseInboundCallsApiState {
-  const { search, status, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit } = filters;
+  const { search, status, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder } = filters;
   const cacheKey = `calls_cache_v5_${direction}_${companyId}_${page}_${JSON.stringify(filters)}`;
 
   const [state, setState] = useState<{
@@ -213,6 +213,8 @@ export function useInboundCallsApi(
           dateTo,
           minDuration,
           durationUnit,
+          sortBy,
+          sortOrder,
         });
 
         if (isCancelled) return;
@@ -268,7 +270,7 @@ export function useInboundCallsApi(
       isCancelled = true;
       clearInterval(intervalId);
     };
-  }, [status, page, retryKey, hasAssignedNumber, companyId, direction, search, assignedNumber, callerNumber, dateFrom, dateTo, minDuration, durationUnit]);
+  }, [status, page, retryKey, hasAssignedNumber, companyId, direction, search, assignedNumber, callerNumber, dateFrom, dateTo, minDuration, durationUnit, sortBy, sortOrder]);
 
   const fallbackAssignedNumber = "Unknown"; // Can fetch from localStorage if needed, omitted here to keep synchronous filtering fast.
 

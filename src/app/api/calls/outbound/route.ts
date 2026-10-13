@@ -73,6 +73,8 @@ export async function GET(req: NextRequest) {
     const minDuration = searchParams.get("minDuration");
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
+    const sortBy = searchParams.get("sortBy") || "date";
+    const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
 
     const getWhereClause = (cId: string) => {
       const whereClause: any = { companyId: cId, direction: "OUTBOUND" };
@@ -147,11 +149,14 @@ export async function GET(req: NextRequest) {
 
     // Fetch skip + limit from EACH company to guarantee correct global sorting and pagination
     const fetchLimit = skip + limit;
+    const prismaOrderBy: any = sortBy === "duration"
+      ? { durationSeconds: sortOrder }
+      : { startedAt: sortOrder };
     
     const promises = companyIdsToQuery.map(cId => 
       prisma.callLog.findMany({
         where: getWhereClause(cId),
-        orderBy: { startedAt: "desc" },
+        orderBy: prismaOrderBy,
         take: fetchLimit,
         include: { 
           phoneNumber: true, 
@@ -164,10 +169,17 @@ export async function GET(req: NextRequest) {
     
     const results = await Promise.all(promises);
     
-    // Merge, sort globally by date, and then paginate
-    const allCalls = results.flat().sort((a, b) => 
-      new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
-    );
+    // Merge, sort globally by requested sortBy/sortOrder, and then paginate
+    const allCalls = results.flat().sort((a, b) => {
+      if (sortBy === "duration") {
+        const durA = a.durationSeconds || 0;
+        const durB = b.durationSeconds || 0;
+        return sortOrder === "asc" ? durA - durB : durB - durA;
+      }
+      const timeA = new Date(a.startedAt).getTime();
+      const timeB = new Date(b.startedAt).getTime();
+      return sortOrder === "asc" ? timeA - timeB : timeB - timeA;
+    });
     
     const mappedCalls = allCalls.slice(skip, skip + limit).map(call => {
       const minutes = Math.floor((call.durationSeconds || 0) / 60);
