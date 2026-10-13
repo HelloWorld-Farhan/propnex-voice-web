@@ -130,6 +130,13 @@ export async function GET(req: NextRequest) {
         const list = reactivationLogsByPhone.get(phone) || [];
         list.push(log);
         reactivationLogsByPhone.set(phone, list);
+
+        const corePhone = phone.replace(/\D/g, "").slice(-10);
+        if (corePhone && corePhone !== phone) {
+          const coreList = reactivationLogsByPhone.get(corePhone) || [];
+          coreList.push(log);
+          reactivationLogsByPhone.set(corePhone, coreList);
+        }
       }
       if (log.leadId) {
         const list = reactivationLogsByLeadId.get(log.leadId) || [];
@@ -327,7 +334,11 @@ export async function GET(req: NextRequest) {
 
       // ── Process Wave 1 Leads ──
       for (const lead of b.q1.failedLeads) {
-        const leadLogsByPhone = reactivationLogsByPhone.get(lead.phone) || [];
+        const corePhone = (lead.phone || "").replace(/\D/g, "").slice(-10);
+        const leadLogsByPhone = [
+          ...(reactivationLogsByPhone.get(lead.phone) || []),
+          ...(corePhone && corePhone !== lead.phone ? (reactivationLogsByPhone.get(corePhone) || []) : [])
+        ];
         const leadLogsById = reactivationLogsByLeadId.get(lead.id) || [];
         const leadLogs = [...new Set([...leadLogsByPhone, ...leadLogsById])];
 
@@ -415,6 +426,22 @@ export async function GET(req: NextRequest) {
             };
             q3FinalList.push(leadQ3Data);
           }
+        }
+      }
+
+      // Check if all leads are completed in Wave 1
+      if (b.q1.status === "Running" && q1FinalList.length > 0) {
+        const allQ1Done = q1FinalList.every(l => l.isCompleted || l.isFailed);
+        if (allQ1Done) {
+          b.q1.status = "Completed";
+        }
+      }
+
+      // Check if all leads are completed in Wave 2
+      if (b.q2.status === "Running" && q2FinalList.length > 0) {
+        const allQ2Done = q2FinalList.every(l => l.isCompleted || l.isFailed);
+        if (allQ2Done) {
+          b.q2.status = "Completed";
         }
       }
 

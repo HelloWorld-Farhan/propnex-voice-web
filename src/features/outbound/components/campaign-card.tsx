@@ -1234,7 +1234,8 @@ export function CampaignCard({
                           };
 
                           const sortedLeads = [...filteredLeads].sort((a: any, b: any) => getLeadScore(b, wave.data.status) - getLeadScore(a, wave.data.status));
-                          const ringingLeads = sortedLeads.filter((l: any) => isLeadRinging(l));
+                          // Ringing / Calling now leads are ALWAYS pinned at the very top of the wave
+                          const ringingLeads = (wave.data.failedLeads || []).filter((l: any) => isLeadRinging(l));
                           const nonRingingLeads = sortedLeads.filter((l: any) => !isLeadRinging(l));
 
                           const currentPage = wavePages[`${activeHist.id}-${wave.stage}`] || 1;
@@ -1243,8 +1244,8 @@ export function CampaignCard({
                           const paginatedLeads = nonRingingLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
 
-                          const processedCount = filteredLeads.filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
-                          const totalCount = filteredLeads.length;
+                          const processedCount = (wave.data.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
+                          const totalCount = (wave.data.failedLeads || []).length;
                           
                           return (
                           <div key={wave.stage} className="flex-1 flex flex-col border border-border/60 rounded-2xl bg-card overflow-hidden shadow-sm relative min-h-[300px] md:min-h-0">
