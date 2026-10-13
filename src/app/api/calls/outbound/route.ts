@@ -100,29 +100,49 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      const andConditions: any[] = [];
+
       if (assignedNumber) {
         const core = getCoreNumber(assignedNumber);
         if (core) {
-          whereClause.phoneNumber = { number: { contains: core } };
+          andConditions.push({
+            OR: [
+              { phoneNumber: { number: { contains: core } } },
+              { historicalDidString: { contains: core } },
+              { providerCallId: { contains: core } },
+            ]
+          });
         }
       }
 
       if (callerNumber) {
         const core = getCoreNumber(callerNumber);
         if (core) {
-          whereClause.lead = { phone: { contains: core } };
+          andConditions.push({
+            OR: [
+              { lead: { phone: { contains: core } } },
+              { providerCallId: { contains: core } },
+            ]
+          });
         }
       }
 
       if (dateFrom || dateTo || freshStartAfter) {
         whereClause.startedAt = {};
-        // Fresh-start: only show calls from when the phone number was assigned
         if (freshStartAfter) whereClause.startedAt.gte = freshStartAfter;
-        if (dateFrom) whereClause.startedAt.gte = new Date(dateFrom);
+        if (dateFrom) {
+          const fromDate = new Date(dateFrom);
+          if (!isNaN(fromDate.getTime())) {
+            fromDate.setHours(0, 0, 0, 0);
+            whereClause.startedAt.gte = fromDate;
+          }
+        }
         if (dateTo) {
           const toDate = new Date(dateTo);
-          toDate.setHours(23, 59, 59, 999);
-          whereClause.startedAt.lte = toDate;
+          if (!isNaN(toDate.getTime())) {
+            toDate.setHours(23, 59, 59, 999);
+            whereClause.startedAt.lte = toDate;
+          }
         }
       }
 
@@ -132,23 +152,25 @@ export async function GET(req: NextRequest) {
           if (durationUnit === "min") {
             minSec = minSec * 60;
           }
-          whereClause.durationSeconds = { gte: minSec };
+          whereClause.durationSeconds = { gte: Math.round(minSec) };
         }
       }
 
       if (search) {
-        const core = getCoreNumber(search);
-        if (core) {
-          whereClause.OR = [
+        const core = getCoreNumber(search) || search;
+        andConditions.push({
+          OR: [
             { lead: { phone: { contains: core } } },
             { phoneNumber: { number: { contains: core } } },
-          ];
-        } else {
-          whereClause.OR = [
-            { lead: { phone: { contains: search } } },
-            { phoneNumber: { number: { contains: search } } },
-          ];
-        }
+            { historicalDidString: { contains: core } },
+            { providerCallId: { contains: core } },
+            { callLogId: { contains: core } },
+          ]
+        });
+      }
+
+      if (andConditions.length > 0) {
+        whereClause.AND = andConditions;
       }
 
       // Hide failed/missed/0s calls IF they are Lead Reactivation calls, unless user specifically filtered for failed/missed

@@ -54,16 +54,24 @@ export function CallLogFiltersBar({
   };
 
   const hasActiveFilters =
-    filters.search !== DEFAULT_CALL_FILTERS.search ||
-    filters.status !== DEFAULT_CALL_FILTERS.status ||
-    filters.dateFrom !== DEFAULT_CALL_FILTERS.dateFrom ||
-    filters.dateTo !== DEFAULT_CALL_FILTERS.dateTo ||
-    filters.assignedNumber !== DEFAULT_CALL_FILTERS.assignedNumber ||
-    filters.callerNumber !== DEFAULT_CALL_FILTERS.callerNumber ||
-    filters.minDuration !== DEFAULT_CALL_FILTERS.minDuration ||
-    filters.durationUnit !== DEFAULT_CALL_FILTERS.durationUnit ||
-    filters.sortBy !== DEFAULT_CALL_FILTERS.sortBy ||
-    filters.sortOrder !== DEFAULT_CALL_FILTERS.sortOrder;
+    Boolean(localFilters.search && localFilters.search !== DEFAULT_CALL_FILTERS.search) ||
+    Boolean(localFilters.status && localFilters.status !== "all") ||
+    Boolean(localFilters.dateFrom && localFilters.dateFrom !== DEFAULT_CALL_FILTERS.dateFrom) ||
+    Boolean(localFilters.dateTo && localFilters.dateTo !== DEFAULT_CALL_FILTERS.dateTo) ||
+    Boolean(localFilters.assignedNumber && localFilters.assignedNumber !== DEFAULT_CALL_FILTERS.assignedNumber) ||
+    Boolean(localFilters.callerNumber && localFilters.callerNumber !== DEFAULT_CALL_FILTERS.callerNumber) ||
+    Boolean(localFilters.minDuration && localFilters.minDuration !== DEFAULT_CALL_FILTERS.minDuration);
+
+  const handleReset = () => {
+    const clean: CallLogFilters = {
+      ...DEFAULT_CALL_FILTERS,
+      sortBy: "date",
+      sortOrder: "desc",
+    };
+    setLocalFilters(clean);
+    onChange(clean);
+    onReset();
+  };
 
   return (
     <div className={cn("glass-card rounded-2xl p-4", className)}>
@@ -76,7 +84,7 @@ export function CallLogFiltersBar({
               variant="ghost"
               size="sm"
               className="h-8 gap-1.5 text-xs"
-              onClick={onReset}
+              onClick={handleReset}
               disabled={loading}
             >
               <RotateCcw className="size-3.5" />
@@ -100,7 +108,7 @@ export function CallLogFiltersBar({
         </div>
       </div>
 
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         {!hideAssignedNumber && (
           <div className="space-y-1.5">
             <label
@@ -231,34 +239,6 @@ export function CallLogFiltersBar({
             <option value="min">Min</option>
           </SelectField>
         </div>
-
-        <SelectField
-          label="Sort By"
-          value={localFilters.sortBy}
-          onChange={(e) =>
-            updateImmediate({
-              sortBy: e.target.value as "date" | "duration",
-            })
-          }
-          disabled={loading}
-        >
-          <option value="duration">Call Duration</option>
-          <option value="date">Call Date</option>
-        </SelectField>
-
-        <SelectField
-          label="Order"
-          value={localFilters.sortOrder}
-          onChange={(e) =>
-            updateImmediate({
-              sortOrder: e.target.value as "desc" | "asc",
-            })
-          }
-          disabled={loading}
-        >
-          <option value="asc">Ascending (Low to High / Oldest)</option>
-          <option value="desc">Descending (High to Low / Newest)</option>
-        </SelectField>
       </div>
     </div>
   );
