@@ -218,6 +218,17 @@ export function CampaignCard({
                   const reactDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + 1));
                   const reactDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(reactDate);
 
+                  // If reactivation was scheduled for a PAST day, it is sealed as Completed:
+                  if (reactDateStr < istDateStr) {
+                    return {
+                      ...item,
+                      q1: { ...item.q1, status: "Completed" },
+                      q2: { ...item.q2, status: "Completed" },
+                      q3: { ...item.q3, status: "Completed" },
+                      overallStatus: "Completed"
+                    };
+                  }
+
                   // If reactivation is scheduled for TODAY:
                   if (reactDateStr === istDateStr) {
                     // Q3 starts at 8:00 PM (1200 mins from midnight). Before 8:00 PM, Q3 cannot be completed unless all leads are completed

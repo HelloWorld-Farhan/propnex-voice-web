@@ -482,10 +482,12 @@ export async function GET(req: NextRequest) {
             if (q3IsStalePending && q3Log?.id) {
               prisma.callLog.update({ where: { id: q3Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
             }
-            const isRingingInQ3 = !completedInQ3 && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
+            const isRingingInQ3 = !isPastDay && !completedInQ3 && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
 
             const isAttemptedQ3 = !!q3Log;
-            const failedInQ3 = !completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (isAttemptedQ3 && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus)));
+            const failedInQ3 = isPastDay
+              ? !completedInQ3
+              : (!completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (isAttemptedQ3 && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus))));
 
             const leadQ3Data = {
               ...lead,
@@ -503,7 +505,7 @@ export async function GET(req: NextRequest) {
       // Wave 2 Status Evaluation
       if (!canRolloverToQ2) {
         b.q2.status = "Pending";
-      } else if (q2Finished) {
+      } else if (q2Finished || isPastDay) {
         b.q2.status = "Completed";
       } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
         b.q2.status = "Pending";
@@ -511,7 +513,7 @@ export async function GET(req: NextRequest) {
         b.q2.status = "Running";
       }
 
-      // Wave 3 Status Evaluation (8:00 PM IST start, NO time limit until all leads completed)
+      // Wave 3 Status Evaluation (8:00 PM IST start, NO time limit until all leads completed for today)
       if (!canRolloverToQ3) {
         b.q3.status = "Pending";
       } else {
@@ -519,7 +521,7 @@ export async function GET(req: NextRequest) {
           const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
           return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
         });
-        const q3Finished = allQ3Attempted && !q3Running;
+        const q3Finished = isPastDay || (allQ3Attempted && !q3Running);
 
         if (q3Finished) {
           b.q3.status = "Completed";
@@ -612,8 +614,11 @@ export async function GET(req: NextRequest) {
         b.q3.status = "Completed";
       }
 
-      // Overall status
-      if (b.q3.status === "Completed") {
+      // Overall status: Past days are permanently Completed across all waves
+      if (isPastDay || b.q3.status === "Completed") {
+        b.q1.status = "Completed";
+        b.q2.status = "Completed";
+        b.q3.status = "Completed";
         b.overallStatus = "Completed";
       } else {
         b.overallStatus =
