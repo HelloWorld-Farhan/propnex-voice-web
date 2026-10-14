@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { calculateTelephonyCredits } from "@/lib/telephony-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +12,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid parameters" }, { status: 400 });
     }
 
-    const blocks = Math.ceil(durationSeconds / 30);
-    const creditsUsed = blocks * 1.75;
+    const creditsUsed = calculateTelephonyCredits(durationSeconds);
 
     const updated = await prisma.callLog.update({
       where: { id: callId },

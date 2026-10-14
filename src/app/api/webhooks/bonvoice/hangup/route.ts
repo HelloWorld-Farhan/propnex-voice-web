@@ -1,24 +1,12 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-
-// 1.75 credits per 30s block inbound, 3.5 outbound
-function phoneVariants(number: any): string[] {
-  if (!number) return [];
-  const raw = String(number).trim();
-  const digits = raw.replace(/\D/g, "");
-  const no91 = digits.replace(/^91/, "");
-  const core = no91.replace(/^0+/, "");
-  if (!core) return [raw];
-  return [...new Set([core, `0${core}`, `91${core}`, `+91${core}`, raw])];
-}
-
-function corePhone(number: any): string | null {
-  if (!number) return null;
-  const digits = String(number).replace(/\D/g, "");
-  const no91 = digits.replace(/^91/, "");
-  const core = no91.replace(/^0+/, "");
-  return core || null;
-}
+import {
+  getPhoneVariants,
+  getCoreNumber,
+  cleanPhone,
+  calculateTelephonyCredits,
+  resolveCallEndpoints,
+} from "@/lib/telephony-utils";
 
 export async function POST(req: Request) {
   try {
@@ -34,62 +22,33 @@ export async function POST(req: Request) {
 
     console.log("Bonvoice Hangup Webhook:", JSON.stringify(data, null, 2));
 
-    const callID = data.callID || data.callId || data.call_id || data.uuid || "";
     const Direction = data.Direction || data.direction || "";
     const StartTime = data.StartTime || data.start_time || data.startTime || "";
     const EndTime = data.EndTime || data.end_time || data.endTime || "";
     const cost = data.cost || data.Cost || "";
     const ResourceURL = data.ResourceURL || data.resource_url || data.resourceUrl || "";
-    
-    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || data.from || "";
-    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.to || data.customerNumber || data.customer_number || "";
-    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || data.did || data.did_number || data.didNumber || "";
-    
-    // Duration: Bonvoice sends CallDuration in seconds
-    const actualDuration = data.CallDuration ?? data.callDuration ?? data.call_duration ?? data.duration ?? 0;
 
-    // Parse numbers from callID if missing
-    if (callID && typeof callID === "string" && callID.includes("-")) {
-      const parts = callID.split("-");
-      if (parts.length >= 3) {
-        if (!DisplayNumber && !DestinationNumber) DisplayNumber = parts[1];
-        if (!SourceNumber) SourceNumber = parts[2];
-      }
-    }
-
-    // Determine direction
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
     const isInbound = directionRaw === "inbound";
     const isDirectionExplicit = directionRaw !== "";
 
-    // Clean up "None" strings that Bonvoice sends for missing fields
-    const cleanNum = (v: string) => {
-      if (!v) return "";
-      const s = String(v).trim();
-      return (s.toLowerCase() !== "none" && s.toLowerCase() !== "null" && s.toLowerCase() !== "undefined") ? s : "";
-    };
-
-    let srcNum = cleanNum(String(SourceNumber || ""));
-    let dstNum = cleanNum(String(DestinationNumber || ""));
-    let dispNum = cleanNum(String(DisplayNumber || ""));
-
-    // Initial mapping
-    let didNumber    = isInbound
-      ? String(dispNum || dstNum || "").trim()
-      : String(dispNum || srcNum || "").trim();
-    let callerNumber = isInbound
-      ? String(srcNum || "").trim()
-      : String(dstNum || "").trim();
+    const endpoints = resolveCallEndpoints(data, isInbound);
+    let didNumber = endpoints.didNumber;
+    let callerNumber = endpoints.callerNumber;
+    const callID = endpoints.callID;
+    const referenceId = endpoints.referenceId;
+    let eventId = endpoints.eventId;
+    const actualDuration = endpoints.actualDuration;
 
     // Intelligent DID discovery for Postman/API/webhook calls:
     // If didNumber doesn't match an assigned DID, but callerNumber does, swap them!
-    const testVariants1 = phoneVariants(didNumber);
+    const testVariants1 = getPhoneVariants(didNumber);
     const hasMatch1 = await prisma.phoneNumber.findFirst({
       where: { number: { in: testVariants1 } },
       select: { id: true }
     });
     if (!hasMatch1 && callerNumber) {
-      const testVariants2 = phoneVariants(callerNumber);
+      const testVariants2 = getPhoneVariants(callerNumber);
       const hasMatch2 = await prisma.phoneNumber.findFirst({
         where: { number: { in: testVariants2 } },
         select: { id: true }
@@ -101,7 +60,7 @@ export async function POST(req: Request) {
       }
     }
 
-    console.log(`Bonvoice Hangup: dir=${isInbound ? "INBOUND" : "OUTBOUND"} DID=${didNumber} caller=${callerNumber} callID=${callID}`);
+    console.log(`Bonvoice Hangup: dir=${isInbound ? "INBOUND" : "OUTBOUND"} DID=${didNumber} caller=${callerNumber} callID=${callID} ref=${referenceId}`);
 
     const recordingUrl = ResourceURL || "";
     const callCost     = cost ? parseFloat(String(cost)) : 0;
@@ -155,7 +114,6 @@ export async function POST(req: Request) {
       }
     } else {
       // OUTBOUND:
-      // If a recording was generated, audio was exchanged and recorded → COMPLETED
       if (recordingUrl && recordingUrl.trim().length > 0) {
         finalMappedStatus = "COMPLETED";
         if (durationSec === 0) {
@@ -187,21 +145,17 @@ export async function POST(req: Request) {
       }
     }
 
-    // Credit calculation: 1.75 credits per 30s block for all completed calls
+    // Standardized credit calculation
     let creditsUsed = 0;
-    if (durationSec > 0 && finalMappedStatus === "COMPLETED") {
-      const blocks = Math.ceil(durationSec / 30);
-      creditsUsed = blocks * 1.75;
-    } else if (finalMappedStatus === "COMPLETED" || (recordingUrl && recordingUrl.trim().length > 0)) {
-      creditsUsed = 1.75;
+    if (finalMappedStatus === "COMPLETED") {
+      creditsUsed = calculateTelephonyCredits(durationSec > 0 ? durationSec : 30);
     }
 
-    const didVariants = phoneVariants(didNumber);
-    const callerCore  = corePhone(callerNumber);
+    const didVariants = getPhoneVariants(didNumber);
+    const callerCore  = getCoreNumber(callerNumber);
 
-    // 1. Find existing call logs by callID or eventId
+    // 1. Find existing call logs by referenceId, callID, or eventId
     let existingLogs: any[] = [];
-    let eventId = data.eventID || data.eventId || data.event_id || data.EventID || data.EventId || "";
     if (callID && typeof callID === "string" && callID.includes("xx")) {
       const rawPfx = callID.split("xx")[0];
       if (!rawPfx.startsWith("20260909_")) {
@@ -210,10 +164,11 @@ export async function POST(req: Request) {
     }
     const isGenericEventId = eventId.startsWith("20260909_");
 
-    if (callID || (eventId && !isGenericEventId)) {
+    if (referenceId || callID || (eventId && !isGenericEventId)) {
       existingLogs = await prisma.callLog.findMany({
         where: {
           OR: [
+            ...(referenceId ? [{ id: referenceId }] : []),
             ...(callID ? [{ providerCallId: String(callID) }] : []),
             ...((eventId && !isGenericEventId) ? [{ callLogId: eventId }, { publicId: eventId }] : [])
           ]
@@ -244,7 +199,7 @@ export async function POST(req: Request) {
     // 3. Last resort: look for a platform-created log with OUT-/pending- prefix providerCallId
     // that matches BOTH the DID AND the caller/customer number
     if (existingLogs.length === 0 && didVariants.length > 0) {
-      const callerCoreStr = corePhone(callerNumber);
+      const callerCoreStr = getCoreNumber(callerNumber);
       if (callerCoreStr) {
         const platformLogs = await prisma.callLog.findMany({
           where: {
@@ -358,7 +313,7 @@ export async function POST(req: Request) {
         // Attempt to find company by loose DID match (search for any PhoneNumber containing DID digits)
         let fallbackCompanyId: string | undefined = undefined;
         if (didNumber) {
-          const didCore = corePhone(didNumber);
+          const didCore = getCoreNumber(didNumber);
           if (didCore) {
             const looseMatch = await prisma.phoneNumber.findFirst({
               where: { number: { contains: didCore } },

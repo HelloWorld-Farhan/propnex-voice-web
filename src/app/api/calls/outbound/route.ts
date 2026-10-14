@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import prisma from "@/lib/prisma";
+import {
+  getCoreNumber,
+  cleanPhone,
+  determineCallType,
+  calculateTelephonyCredits,
+  normalizeCallStatus,
+} from "@/lib/telephony-utils";
 
 const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-function getCoreNumber(num: string) {
-  if (!num) return "";
-  let d = num.replace(/\D/g, "").replace(/^0+/, "");
-  if (d.startsWith("91") && d.length >= 10) {
-    d = d.substring(2);
-  }
-  return d;
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -21,13 +19,13 @@ export async function GET(req: NextRequest) {
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    
+
     const token = authHeader.split(" ")[1];
     const decoded: any = jwt.verify(token, JWT_SECRET);
     const userId = decoded.sub || decoded.id;
 
     const member = await (prisma as any).companyMember.findFirst({
-      where: { userId, status: "ACTIVE" }
+      where: { userId, status: "ACTIVE" },
     });
 
     if (!member?.companyId) {
@@ -36,33 +34,29 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const targetCompanyId = searchParams.get("companyId");
-    
-    let companyIdsToQuery = [member.companyId];
 
+    let companyIdsToQuery = [member.companyId];
     let freshStartAfter: Date | null = null;
 
     if (targetCompanyId && targetCompanyId !== member.companyId) {
-      // Check if targetCompanyId is a sub-company of the user's company
       const subCompany = await (prisma.company.findFirst as any)({
         where: { id: targetCompanyId, parentCompanyId: member.companyId },
-        include: { phoneNumbers: { select: { createdAt: true }, take: 1, orderBy: { createdAt: "asc" } } }
+        include: { phoneNumbers: { select: { createdAt: true }, take: 1, orderBy: { createdAt: "asc" } } },
       });
       if (subCompany) {
         companyIdsToQuery = [targetCompanyId];
-        // Fresh-start: only show calls from when the first number was assigned
         const earliestAssignment = (subCompany as any).phoneNumbers?.[0]?.createdAt;
         if (earliestAssignment) freshStartAfter = new Date(earliestAssignment);
       }
     } else {
-      // Fetch parent + all child companies' calls
       const subCompanies = await prisma.company.findMany({
         where: { parentCompanyId: member.companyId },
-        select: { id: true }
+        select: { id: true },
       });
       companyIdsToQuery = [member.companyId, ...subCompanies.map((c: any) => c.id)];
     }
 
-    // Query all phone numbers associated with the requested companies to catch internal calls linked by DID
+    // Single query to discover all DIDs associated with the queried companies
     const companyPhoneNumbers = await prisma.phoneNumber.findMany({
       where: { companyId: { in: companyIdsToQuery } },
       select: { id: true, number: true },
@@ -114,6 +108,30 @@ export async function GET(req: NextRequest) {
 
       const andConditions: any[] = [];
 
+      // MongoDB Safe Reactivation Filter:
+      // Hide unfinalized reactivation calls without dropping calls where correlationId is unset or null (internal/Postman/PBX calls).
+      if (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toUpperCase() === "COMPLETED") {
+        andConditions.push({
+          OR: [
+            { correlationId: { isSet: false } },
+            { correlationId: null },
+            {
+              AND: [
+                { correlationId: { isSet: true } },
+                { correlationId: { not: { startsWith: "reactivation-" } } },
+              ],
+            },
+            {
+              AND: [
+                { correlationId: { startsWith: "reactivation-" } },
+                { status: "COMPLETED" },
+                { durationSeconds: { gt: 0 } },
+              ],
+            },
+          ],
+        });
+      }
+
       if (assignedNumber) {
         const core = getCoreNumber(assignedNumber);
         if (core) {
@@ -122,7 +140,7 @@ export async function GET(req: NextRequest) {
               { phoneNumber: { number: { contains: core } } },
               { historicalDidString: { contains: core } },
               { providerCallId: { contains: core } },
-            ]
+            ],
           });
         }
       }
@@ -134,7 +152,7 @@ export async function GET(req: NextRequest) {
             OR: [
               { lead: { phone: { contains: core } } },
               { providerCallId: { contains: core } },
-            ]
+            ],
           });
         }
       }
@@ -177,30 +195,12 @@ export async function GET(req: NextRequest) {
             { historicalDidString: { contains: core } },
             { providerCallId: { contains: core } },
             { callLogId: { contains: core } },
-          ]
+          ],
         });
       }
 
       if (andConditions.length > 0) {
         whereClause.AND = andConditions;
-      }
-
-      // Reactivation calls: hide non-completed ones from the outbound table.
-      // All other calls (internal, lead, campaign) pass through unconditionally.
-      if (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toUpperCase() === "COMPLETED") {
-        // NOT ( correlationId starts-with "reactivation-" AND (status!=COMPLETED OR duration==0) )
-        // = only reactivation calls that are fully finalized (COMPLETED + duration>0) are shown.
-        whereClause.NOT = {
-          AND: [
-            { correlationId: { startsWith: "reactivation-" } },
-            {
-              OR: [
-                { status: { not: "COMPLETED" } },
-                { durationSeconds: 0 },
-              ]
-            }
-          ]
-        };
       }
 
       return whereClause;
@@ -211,7 +211,6 @@ export async function GET(req: NextRequest) {
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
 
-    // Live calls pinned at top — exclude live reactivation ones (they live in the reactivation dashboard).
     const shouldIncludeLive = !statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
     const liveOutboundWhere: any = {
       direction: "OUTBOUND",
@@ -235,7 +234,7 @@ export async function GET(req: NextRequest) {
           phoneNumber: true,
           lead: true,
           campaign: { include: { phoneNumbers: { take: 1 } } },
-          company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } }
+          company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } },
         },
       }),
       shouldIncludeLive
@@ -247,12 +246,11 @@ export async function GET(req: NextRequest) {
               phoneNumber: true,
               lead: true,
               campaign: { include: { phoneNumbers: { take: 1 } } },
-              company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } }
+              company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } },
             },
           })
         : Promise.resolve([]),
     ]);
-
 
     // Merge: live calls at top, deduplicate by id so a call never appears twice
     const seenIds = new Set<string>();
@@ -264,90 +262,48 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const cleanPhone = (val: any) => {
-      if (!val) return "";
-      const s = String(val).trim();
-      if (s.toLowerCase() === "none" || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return "";
-      return s;
-    };
-
-    const mappedCalls = mergedCalls.map(call => {
-      // Aggressively extract assigned/DID number and customer number from all available JSON fields
+    const mappedCalls = mergedCalls.map((call) => {
       let fallbackAssignedNumber = "";
       let fallbackCustomerNumber = "";
-      
-      // 1. Try providerWebhook (Bonvoice: DisplayNumber = DID assigned number, DestinationNumber = customer)
-      if (call.providerWebhook && typeof call.providerWebhook === 'object') {
-         const wh: any = call.providerWebhook;
-         fallbackAssignedNumber =
-           cleanPhone(wh.DisplayNumber || wh.display_number || wh.displayNumber) ||
-           cleanPhone(wh.SourceNumber || wh.source_number || wh.sourceNumber) ||
-           cleanPhone(wh.did || wh.agentNumber || wh.did_number || wh.didNumber) ||
-           cleanPhone(wh.message?.call?.agent?.number || wh.call?.agent?.number) || "";
-         
-         fallbackCustomerNumber =
-           cleanPhone(wh.DestinationNumber || wh.destination_number || wh.destinationNumber) ||
-           cleanPhone(wh.caller || wh.to_number || wh.to) ||
-           cleanPhone(wh.customer_number || wh.customerNumber) || "";
-         
-         // Last resort: parse DID from callID (format: uuid-DID-CALLER-DATE-TIME)
-         const callIdRaw = cleanPhone(wh.callID || wh.callId || wh.call_id || wh.uuid);
-         if (!fallbackAssignedNumber && callIdRaw.includes('-')) {
-           const parts = callIdRaw.split('-');
-           if (parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
-         }
-         if (!fallbackCustomerNumber && callIdRaw.includes('-')) {
-           const parts = callIdRaw.split('-');
-           if (parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
-         }
+
+      if (call.providerWebhook && typeof call.providerWebhook === "object") {
+        const wh: any = call.providerWebhook;
+        fallbackAssignedNumber =
+          cleanPhone(wh.DisplayNumber || wh.display_number || wh.displayNumber) ||
+          cleanPhone(wh.SourceNumber || wh.source_number || wh.sourceNumber) ||
+          cleanPhone(wh.did || wh.agentNumber || wh.did_number || wh.didNumber) ||
+          cleanPhone(wh.message?.call?.agent?.number || wh.call?.agent?.number) || "";
+
+        fallbackCustomerNumber =
+          cleanPhone(wh.DestinationNumber || wh.destination_number || wh.destinationNumber) ||
+          cleanPhone(wh.caller || wh.to_number || wh.to) ||
+          cleanPhone(wh.customer_number || wh.customerNumber) || "";
+
+        const callIdRaw = cleanPhone(wh.callID || wh.callId || wh.call_id || wh.uuid);
+        if (!fallbackAssignedNumber && callIdRaw.includes("-")) {
+          const parts = callIdRaw.split("-");
+          if (parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
+        }
+        if (!fallbackCustomerNumber && callIdRaw.includes("-")) {
+          const parts = callIdRaw.split("-");
+          if (parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
+        }
       }
 
-      // If providerCallId contains parts
-      if ((!fallbackAssignedNumber || !fallbackCustomerNumber) && call.providerCallId && call.providerCallId.includes('-')) {
-        const parts = call.providerCallId.split('-');
+      if ((!fallbackAssignedNumber || !fallbackCustomerNumber) && call.providerCallId && call.providerCallId.includes("-")) {
+        const parts = call.providerCallId.split("-");
         if (!fallbackAssignedNumber && parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
         if (!fallbackCustomerNumber && parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
       }
 
-      // 2. Try providerRequest
-      if (!fallbackAssignedNumber && call.providerRequest && typeof call.providerRequest === 'object') {
-        const req: any = call.providerRequest;
-        fallbackAssignedNumber =
-          cleanPhone(req.did_number || req.didNumber || req.agentNumber || req.from_number || req.agent?.number || req.call?.did_number);
-      }
-
-      // 3. Try providerResponse
-      if (!fallbackAssignedNumber && call.providerResponse && typeof call.providerResponse === 'object') {
-        const res: any = call.providerResponse;
-        fallbackAssignedNumber =
-          cleanPhone(res.did_number || res.didNumber || res.agentNumber || res.from);
-      }
-
-      // 4. Try campaign's linked phone number
       const campaignDid = cleanPhone((call as any).campaign?.phoneNumbers?.[0]?.number);
-
-      // 5. Try the company's default outbound phone number
       const companyDid = cleanPhone((call as any).company?.phoneNumbers?.[0]?.number);
 
-      // 6. Determine callType:
-      // - campaign: campaignId is set OR correlationId starts with "camp-"
-      // - lead: correlationId starts with "reactivation-" OR leadId set (and not auto-created "Internal")
-      // - internal: pure manual dial, internal extension, or webhook-created unlinked call
-      let callType: "lead" | "campaign" | "internal" = "internal";
-      if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
-        callType = "campaign";
-      } else if (call.correlationId && call.correlationId.startsWith("reactivation-")) {
-        callType = "lead";
-      } else if (call.leadId && call.lead?.firstName !== "Internal") {
-        callType = "lead";
-      } else {
-        callType = "internal";
-      }
+      // Canonical call type classification
+      const callType = determineCallType(call);
 
-      // 7. Display status normalisation:
+      // Duration & recording resolution
       const hasRecording = Boolean(call.recordingUrl && String(call.recordingUrl).trim().length > 0);
-      const rawStatus = (call.status || "").toLowerCase();
-
       let effectiveDurationSec = call.durationSeconds || 0;
       if (hasRecording && effectiveDurationSec === 0) {
         if (call.startedAt && call.endedAt) {
@@ -355,34 +311,21 @@ export async function GET(req: NextRequest) {
           if (diff > 0 && diff <= 3600) effectiveDurationSec = diff;
         }
         if (effectiveDurationSec === 0) {
-          effectiveDurationSec = 26; // sensible fallback
+          effectiveDurationSec = 26;
         }
       }
 
-      let displayStatus: string;
-      if (hasRecording) {
-        displayStatus = "completed";
-      } else if (rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed" || rawStatus === "voicemail") {
-        displayStatus = "missed";
-      } else if (rawStatus === "failed" || rawStatus === "cancelled" || rawStatus === "cancel" || rawStatus === "chanunavail" || rawStatus === "congestion") {
-        displayStatus = "failed";
-      } else if (effectiveDurationSec === 0 && rawStatus !== "completed" && rawStatus !== "missed") {
-        displayStatus = "failed";
-      } else {
-        displayStatus = rawStatus;
-      }
+      const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
+      const isLive = LIVE_STATUSES.includes(call.status);
+      const finalStatus = normalizeCallStatus(call.status, effectiveDurationSec, hasRecording, isLive);
 
       const effMinutes = Math.floor(effectiveDurationSec / 60);
       const effSeconds = effectiveDurationSec % 60;
 
-      const LIVE_STATUSES = ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"];
-      const isLive = LIVE_STATUSES.includes(call.status);
-      const finalStatus = isLive ? rawStatus : displayStatus;
-
-      // 8. Credits: 1.75 credits per 30s block
+      // Telephony credits calculation
       let effectiveCredits = call.creditsUsed || 0;
-      if (effectiveCredits === 0 && (hasRecording || displayStatus === "completed") && effectiveDurationSec > 0) {
-        effectiveCredits = Math.ceil(effectiveDurationSec / 30) * 1.75;
+      if (effectiveCredits === 0 && finalStatus === "completed" && effectiveDurationSec > 0) {
+        effectiveCredits = calculateTelephonyCredits(effectiveDurationSec);
       }
 
       return {
@@ -401,7 +344,6 @@ export async function GET(req: NextRequest) {
         liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
         callType,
       };
-
     });
 
     const adjustedTotal = Math.max(mappedCalls.length, total);
@@ -412,10 +354,9 @@ export async function GET(req: NextRequest) {
         total: adjustedTotal,
         page,
         limit,
-        totalPages: Math.ceil(adjustedTotal / limit) || 1
-      }
+        totalPages: Math.ceil(adjustedTotal / limit) || 1,
+      },
     });
-
   } catch (err: any) {
     console.error("Failed to fetch outbound calls:", err);
     return NextResponse.json({ data: [], meta: { total: 0, page: 1, limit: 10, totalPages: 1 } });
@@ -428,13 +369,13 @@ export async function PUT(req: NextRequest) {
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    
+
     const token = authHeader.split(" ")[1];
     const decoded: any = jwt.verify(token, JWT_SECRET);
     const userId = decoded.sub || decoded.id;
 
     const member = await (prisma as any).companyMember.findFirst({
-      where: { userId, status: "ACTIVE" }
+      where: { userId, status: "ACTIVE" },
     });
 
     if (!member?.companyId) {
@@ -442,31 +383,30 @@ export async function PUT(req: NextRequest) {
     }
 
     const body = await req.json();
-    
+
     if (body.action === "fail" && body.phone) {
       const core = getCoreNumber(body.phone);
       if (core) {
-        // Mark ALL PENDING calls for this phone as FAILED to prevent stuck states
         let updateData: any = { status: "FAILED" };
         if (body.assignedNumber) {
-           updateData.providerWebhook = { did_number: body.assignedNumber };
+          updateData.providerWebhook = { did_number: body.assignedNumber };
         }
-        
+
         const updated = await prisma.callLog.updateMany({
           where: {
             companyId: member.companyId,
             status: "PENDING",
             lead: {
-              phone: { contains: core }
-            }
+              phone: { contains: core },
+            },
           },
-          data: updateData
+          data: updateData,
         });
 
         return NextResponse.json({ success: true, count: updated.count });
       }
     }
-    
+
     return NextResponse.json({ success: false, message: "Invalid request or no pending call found" });
   } catch (err: any) {
     console.error("Failed to update outbound call:", err);

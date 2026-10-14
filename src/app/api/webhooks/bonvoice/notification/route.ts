@@ -1,27 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-
-/**
- * Generate all possible phone number formats for DB lookup.
- * e.g. "07946350796" → ["7946350796", "07946350796", "917946350796", "+917946350796"]
- */
-function phoneVariants(number: any): string[] {
-  if (!number) return [];
-  const raw = String(number).trim();
-  const digits = raw.replace(/\D/g, "");
-  const no91 = digits.replace(/^91/, "");
-  const core = no91.replace(/^0+/, "");
-  if (!core) return [raw];
-  return [...new Set([core, `0${core}`, `91${core}`, `+91${core}`, raw])];
-}
-
-function corePhone(number: any): string | null {
-  if (!number) return null;
-  const digits = String(number).replace(/\D/g, "");
-  const no91 = digits.replace(/^91/, "");
-  const core = no91.replace(/^0+/, "");
-  return core || null;
-}
+import {
+  getPhoneVariants,
+  getCoreNumber,
+  resolveCallEndpoints,
+} from "@/lib/telephony-utils";
 
 /**
  * Map Bonvoice notification payload to our internal call status.
@@ -32,11 +15,9 @@ function corePhone(number: any): string | null {
  *   Status field can also be: "RINGING", "ANSWERED", "NO ANSWER", "BUSY", "FAILED"
  */
 function mapBonvoiceStatus(data: any): string {
-  // Prefer explicit Status field from Bonvoice (most reliable)
   const statusRaw = (data.Status || data.status || "").toString().toUpperCase().trim();
   const agentStatusRaw = (data.AgentStatus || data.agent_status || "").toString().toUpperCase().trim();
   
-  // If Status is None but AgentStatus has a real value, use AgentStatus
   const effectiveStatus = (statusRaw === "NONE" || !statusRaw) && agentStatusRaw && agentStatusRaw !== "NONE" ? agentStatusRaw : statusRaw;
 
   if (effectiveStatus === "ANSWERED") return "ANSWERED";
@@ -45,13 +26,12 @@ function mapBonvoiceStatus(data: any): string {
   if (effectiveStatus === "BUSY") return "MISSED";
   if (effectiveStatus === "FAILED" || effectiveStatus === "CANCEL" || effectiveStatus === "CANCELLED" || effectiveStatus === "CHANUNAVAIL") return "FAILED";
 
-  // Fallback: use callType numeric value
   const callType = parseInt(String(data.callType ?? data.CallType ?? ""), 10);
   if (callType === 0) return "RINGING";
   if (callType === 1) return "ANSWERED";
   if (callType === 2) return "COMPLETED";
 
-  return "RINGING"; // default for notification webhook
+  return "RINGING";
 }
 
 export async function POST(req: Request) {
@@ -68,55 +48,29 @@ export async function POST(req: Request) {
 
     console.log("Bonvoice Notification Webhook:", JSON.stringify(data, null, 2));
 
-    const callID = data.callID || data.callId || data.call_id || data.uuid || "";
     const Direction = data.Direction || data.direction || "";
     const StartTime = data.StartTime || data.start_time || data.startTime || "";
-    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || data.from || "";
-    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.to || data.customerNumber || data.customer_number || "";
-    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || data.did || data.did_number || data.didNumber || "";
 
-    // Parse numbers from callID if missing
-    // Format: UUID.ext-DID-CALLER-DATE-TIME (e.g. 1788955197.876345-7946350796-8851860838-20260909-172958)
-    if (callID && typeof callID === "string" && callID.includes("-")) {
-      const parts = callID.split("-");
-      if (parts.length >= 3) {
-        if (!DisplayNumber && !DestinationNumber) DisplayNumber = parts[1];
-        if (!SourceNumber) SourceNumber = parts[2];
-      }
-    }
-
-    // Determine direction
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
     const isInbound = directionRaw === "inbound";
     const isDirectionExplicit = directionRaw !== "";
 
-    // Clean up "None" strings that Bonvoice sends for missing fields
-    const cleanNum = (v: string) => {
-      if (!v) return "";
-      const s = String(v).trim();
-      return (s.toLowerCase() !== "none" && s.toLowerCase() !== "null" && s.toLowerCase() !== "undefined") ? s : "";
-    };
-
-    const srcNum  = cleanNum(String(SourceNumber || ""));
-    const dstNum  = cleanNum(String(DestinationNumber || ""));
-    const dispNum = cleanNum(String(DisplayNumber || ""));
-
-    // Map fields per direction:
-    let didNumber   = isInbound
-      ? String(dispNum || dstNum || "").trim()
-      : String(dispNum || srcNum || "").trim();
-    let callerNumber = isInbound
-      ? String(srcNum || "").trim()
-      : String(dstNum || "").trim();
+    const endpoints = resolveCallEndpoints(data, isInbound);
+    let didNumber = endpoints.didNumber;
+    let callerNumber = endpoints.callerNumber;
+    const callID = endpoints.callID;
+    const referenceId = endpoints.referenceId;
+    let eventId = endpoints.eventId;
+    const durationSeconds = endpoints.actualDuration;
 
     // Intelligent DID discovery for Postman/API/webhook calls:
-    const testVariants1 = phoneVariants(didNumber);
+    const testVariants1 = getPhoneVariants(didNumber);
     const hasMatch1 = await prisma.phoneNumber.findFirst({
       where: { number: { in: testVariants1 } },
       select: { id: true }
     });
     if (!hasMatch1 && callerNumber) {
-      const testVariants2 = phoneVariants(callerNumber);
+      const testVariants2 = getPhoneVariants(callerNumber);
       const hasMatch2 = await prisma.phoneNumber.findFirst({
         where: { number: { in: testVariants2 } },
         select: { id: true }
@@ -128,44 +82,36 @@ export async function POST(req: Request) {
       }
     }
 
-    const callDurationRaw = data.CallDuration || data.duration;
-    let durationSeconds = 0;
-    if (callDurationRaw !== undefined && callDurationRaw !== null && callDurationRaw !== "") {
-      const parsed = parseInt(String(callDurationRaw).trim(), 10);
-      if (!isNaN(parsed)) durationSeconds = parsed;
-    }
-
     let mappedStatus = mapBonvoiceStatus(data);
     const isCallLive = mappedStatus === "RINGING" || mappedStatus === "ANSWERED";
 
-    // If a call is finished but has 0 duration, it should be marked as FAILED or MISSED
     if (!isCallLive && durationSeconds === 0) {
       if (mappedStatus !== "MISSED") {
         mappedStatus = "FAILED";
       }
     }
 
-    console.log(`Bonvoice Notification: dir=${isInbound ? "INBOUND" : "OUTBOUND"} status=${mappedStatus} DID=${didNumber} caller=${callerNumber} callID=${callID}`);
+    console.log(`Bonvoice Notification: dir=${isInbound ? "INBOUND" : "OUTBOUND"} status=${mappedStatus} DID=${didNumber} caller=${callerNumber} callID=${callID} ref=${referenceId}`);
 
     if (!didNumber) {
       console.log("Bonvoice Notification: No DID found, skipping.");
       return NextResponse.json({ success: true });
     }
 
-    const didVariants  = phoneVariants(didNumber);
-    const callerCore   = corePhone(callerNumber);
+    const didVariants  = getPhoneVariants(didNumber);
+    const callerCore   = getCoreNumber(callerNumber);
 
-    // 1. Check for existing call logs by callID or eventId
+    // 1. Check for existing call logs by referenceId, callID, or eventId
     let existingLogs: any[] = [];
-    let eventId = data.eventID || data.eventId || data.event_id || data.EventID || data.EventId || "";
     if (callID && typeof callID === "string" && callID.includes("xx")) {
       eventId = callID.split("xx")[0];
     }
 
-    if (callID || eventId) {
+    if (referenceId || callID || eventId) {
       existingLogs = await prisma.callLog.findMany({
         where: {
           OR: [
+            ...(referenceId ? [{ id: referenceId }] : []),
             ...(callID ? [{ providerCallId: String(callID) }] : []),
             ...(eventId ? [{ callLogId: eventId }] : []),
             ...(eventId ? [{ publicId: eventId }] : [])
@@ -213,7 +159,7 @@ export async function POST(req: Request) {
         // Attempt to find company by loose DID match (search for any PhoneNumber containing DID digits)
         let fallbackCompanyId: string | undefined = undefined;
         if (didNumber) {
-          const didCore = corePhone(didNumber);
+          const didCore = getCoreNumber(didNumber);
           if (didCore) {
             const looseMatch = await prisma.phoneNumber.findFirst({
               where: { number: { contains: didCore } },

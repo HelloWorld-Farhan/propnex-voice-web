@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { Button } from "@/components/ui/button";
 import type { CallRecord } from "@/types/call";
 import { cn } from "@/lib/utils";
+import { formatDisplayNumber, calculateTelephonyCredits } from "@/lib/telephony-utils";
 
 type CallLogTableProps = {
   calls: CallRecord[];
@@ -75,16 +76,6 @@ export function CallLogTable({
     }).catch(() => {});
   };
 
-  const cleanDisplayNumber = (num?: string | null) => {
-    if (!num) return "";
-    const trimmed = String(num).trim();
-    if (!trimmed || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "null") return "";
-    if (trimmed.startsWith("+")) return trimmed;
-    const digits = trimmed.replace(/\D/g, "");
-    const core = digits.replace(/^91/, "").replace(/^0+/, "");
-    return core ? `+91${core}` : trimmed;
-  };
-
   return (
     <div className={cn("glass-card overflow-hidden rounded-2xl", className)}>
       <div className="overflow-x-auto">
@@ -133,7 +124,7 @@ export function CallLogTable({
 
               // 1.75 credits per 30-second block for outbound completed calls
               const calculatedCredits = realDurationSec > 0
-                ? Math.ceil(realDurationSec / 30) * 1.75
+                ? calculateTelephonyCredits(realDurationSec)
                 : (call.creditsUsed || 0);
 
               const isCompletedOrRecorded = call.status?.toLowerCase() === "completed" || Boolean(call.recordingUrl);
@@ -147,8 +138,8 @@ export function CallLogTable({
                 call.creditsUsed || 0
               );
 
-              const customerFormatted = cleanDisplayNumber(call.customerNumber);
-              const assignedFormatted = cleanDisplayNumber(call.assignedNumber);
+              const customerFormatted = formatDisplayNumber(call.customerNumber);
+              const assignedFormatted = formatDisplayNumber(call.assignedNumber);
 
               return (
                 <tr
