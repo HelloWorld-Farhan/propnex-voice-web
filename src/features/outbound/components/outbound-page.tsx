@@ -512,13 +512,11 @@ export function OutboundPageContent() {
         <div>
           <h2 className="text-lg font-semibold">Outbound Call Logs</h2>
           <p className="text-sm text-muted-foreground">
-            {loading
-              ? "Loading outgoing calls…"
-              : error
-                ? "Could not load calls from server"
-                : totalCalls > 0
-                  ? `${totalCalls} outgoing call${totalCalls === 1 ? "" : "s"} found`
-                  : "Manage campaigns and monitor outgoing AI voice calls"}
+            {error
+              ? "Could not load calls from server"
+              : totalCalls > 0
+                ? `${totalCalls.toLocaleString()} outgoing call${totalCalls === 1 ? "" : "s"} found`
+                : "Manage campaigns and monitor outgoing AI voice calls"}
           </p>
         </div>
       </motion.div>

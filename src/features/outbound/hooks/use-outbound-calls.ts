@@ -11,23 +11,36 @@ export function useOutboundCalls() {
   const [filters, setFilters] = useState<CallLogFilters>(DEFAULT_CALL_FILTERS);
 
   const [page, setPage] = useState(1);
-  const [calls, setCalls] = useState<CallRecord[]>([]);
-  const [totalCalls, setTotalCalls] = useState(0);
+  const [calls, setCalls] = useState<CallRecord[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("propnex_outbound_calls_cache");
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
+  const [totalCalls, setTotalCalls] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("propnex_outbound_total_cache");
+        if (cached) return parseInt(cached, 10) || 0;
+      } catch {}
+    }
+    return 0;
+  });
   const [totalPages, setTotalPages] = useState(1);
-  // Start as false — set to true only when we actually begin fetching so the UI
-  // never gets permanently stuck in "Loading outgoing calls…" if the user context
-  // takes a moment to hydrate or if the early-guard fires.
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchCalls = useCallback(async (isBackground = false) => {
     if (!user?.companyId) {
-      // User context not ready yet — make sure we are NOT stuck in loading state
       setLoading(false);
       return;
     }
 
-    if (!isBackground) {
+    // Only set loading to true if we don't have any cached calls to show
+    if (!isBackground && calls.length === 0) {
       setLoading(true);
     }
 
@@ -62,6 +75,14 @@ export function useOutboundCalls() {
       const newTotal = data.meta?.total || 0;
       const newPages = data.meta?.totalPages || 1;
 
+      // Cache primary page results in localStorage so subsequent opens render instantly
+      if (page === 1 && (!filters.status || filters.status === "all") && !filters.search && !filters.callerNumber && !filters.assignedNumber) {
+        try {
+          localStorage.setItem("propnex_outbound_calls_cache", JSON.stringify(newCalls));
+          localStorage.setItem("propnex_outbound_total_cache", newTotal.toString());
+        } catch {}
+      }
+
       // Prevent unnecessary re-renders: skip state update if background poll returns identical data
       setCalls((prev) => {
         const prevSig = prev
@@ -84,7 +105,7 @@ export function useOutboundCalls() {
         setLoading(false);
       }
     }
-  }, [page, filters, user?.companyId]);
+  }, [page, filters, user?.companyId, calls.length]);
 
   // Immediately clear loading when user context becomes available (or is still absent)
   // so we never stay stuck at "Loading outgoing calls…"

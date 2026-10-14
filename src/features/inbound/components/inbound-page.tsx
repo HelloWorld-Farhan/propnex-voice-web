@@ -186,13 +186,11 @@ export function InboundPageContent() {
           <div>
             <h2 className="text-lg font-semibold">Inbound Calls</h2>
             <p className="text-sm text-muted-foreground">
-              {loading
-                ? "Loading incoming calls…"
-                : error
-                  ? "Could not load calls from server"
-                  : total > 0
-                    ? `${total} incoming call${total === 1 ? "" : "s"} found`
-                    : "Incoming calls handled for this sub-company"}
+              {error
+                ? "Could not load calls from server"
+                : total > 0
+                  ? `${total.toLocaleString()} incoming call${total === 1 ? "" : "s"} found`
+                  : "Incoming calls handled for this sub-company"}
             </p>
           </div>
         </div>
