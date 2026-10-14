@@ -256,10 +256,10 @@ export function useInboundCallsApi(
           saveInboundCache();
         }
 
-        // Smart polling: if there are live calls (RINGING/ANSWERED), poll every 3s.
-        // Otherwise, poll quietly every 20s in background to prevent constant UI refreshes!
+        // Smart polling: if there are live calls (RINGING/ANSWERED), poll every 2s.
+        // Otherwise, poll quietly every 3s in background to capture calls in near real-time!
         clearInterval(intervalId);
-        const pollInterval = hasLiveCalls ? 3000 : 20000;
+        const pollInterval = hasLiveCalls ? 2000 : 3000;
         intervalId = setInterval(() => void load(true), pollInterval);
       } catch (err) {
         if (isCancelled) return;
@@ -275,8 +275,8 @@ export function useInboundCallsApi(
 
     void load();
 
-    // Default 20s background poll when no active live calls
-    intervalId = setInterval(() => void load(true), 20000);
+    // Default 3s background poll
+    intervalId = setInterval(() => void load(true), 3000);
 
     return () => {
       isCancelled = true;

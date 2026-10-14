@@ -108,30 +108,6 @@ export async function GET(req: NextRequest) {
 
       const andConditions: any[] = [];
 
-      // MongoDB Safe Reactivation Filter:
-      // Hide unfinalized reactivation calls without dropping calls where correlationId is unset or null (internal/Postman/PBX calls).
-      if (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toUpperCase() === "COMPLETED") {
-        andConditions.push({
-          OR: [
-            { correlationId: { isSet: false } },
-            { correlationId: null },
-            {
-              AND: [
-                { correlationId: { isSet: true } },
-                { correlationId: { not: { startsWith: "reactivation-" } } },
-              ],
-            },
-            {
-              AND: [
-                { correlationId: { startsWith: "reactivation-" } },
-                { status: "COMPLETED" },
-                { durationSeconds: { gt: 0 } },
-              ],
-            },
-          ],
-        });
-      }
-
       if (assignedNumber) {
         const core = getCoreNumber(assignedNumber);
         if (core) {
@@ -220,7 +196,6 @@ export async function GET(req: NextRequest) {
         ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
       ],
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
-      NOT: { correlationId: { startsWith: "reactivation-" } },
     };
 
     const [total, calls, liveCalls] = await Promise.all([

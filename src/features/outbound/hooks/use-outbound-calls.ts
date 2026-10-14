@@ -65,10 +65,10 @@ export function useOutboundCalls() {
       // Prevent unnecessary re-renders: skip state update if background poll returns identical data
       setCalls((prev) => {
         const prevSig = prev
-          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.recordingUrl}`)
+          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
           .join(",");
         const nextSig = newCalls
-          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.recordingUrl}`)
+          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
           .join(",");
         if (isBackground && prevSig === nextSig) {
           return prev;
@@ -97,10 +97,10 @@ export function useOutboundCalls() {
   useEffect(() => {
     fetchCalls(false);
 
-    // Background polling every 5 s for near real-time updates
+    // Background polling every 2 s for seamless real-time updates
     const id = setInterval(() => {
       fetchCalls(true);
-    }, 5000);
+    }, 2000);
 
     return () => clearInterval(id);
   }, [fetchCalls]);

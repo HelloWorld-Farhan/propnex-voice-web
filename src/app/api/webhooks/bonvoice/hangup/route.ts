@@ -230,7 +230,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const logsToCharge: { companyId: string; callLogId: string }[] = [];
+    const logsToCharge: { companyId: string; callLogId: string; credits: number; duration: number }[] = [];
 
     if (existingLogs.length > 0) {
       // 3a. Update existing call logs
@@ -312,10 +312,23 @@ export async function POST(req: Request) {
       }
 
       // Charge credits ONLY ONCE for the primary company IF NOT outbound-only inbound
-      if (!isOutboundOnlyInbound && primaryLog?.companyId && creditsUsed > 0) {
-        logsToCharge.push({ companyId: primaryLog.companyId, callLogId: primaryLog.id });
+      const primaryHasRec = Boolean((primaryLog?.recordingUrl || recordingUrl) && String(primaryLog?.recordingUrl || recordingUrl).trim().length > 0);
+      const primarySafeStatus = primaryHasRec ? "COMPLETED" : finalMappedStatus;
+      if (!isOutboundOnlyInbound && primaryLog?.companyId) {
+        const primaryDuration = durationSec > 0 ? durationSec : (primaryLog.durationSeconds > 0 ? primaryLog.durationSeconds : 0);
+        const primaryCredits = (primarySafeStatus === "COMPLETED" || primaryHasRec) && primaryDuration > 0
+          ? calculateTelephonyCredits(primaryDuration)
+          : 0;
+        if (primaryCredits > 0) {
+          logsToCharge.push({
+            companyId: primaryLog.companyId,
+            callLogId: primaryLog.id,
+            credits: primaryCredits,
+            duration: primaryDuration,
+          });
+        }
       }
-      console.log(`Bonvoice Hangup: Updated ${existingLogs.length} call logs → COMPLETED (${durationSec}s), charged single company=${isOutboundOnlyInbound ? "NONE" : primaryLog?.companyId}`);
+      console.log(`Bonvoice Hangup: Updated ${existingLogs.length} call logs → ${primarySafeStatus} (${durationSec}s), charged single company=${isOutboundOnlyInbound ? "NONE" : primaryLog?.companyId}`);
     } else {
       // 3b. Create SINGLE NEW COMPLETED call log (if notification webhook was missed)
       const candidates = await prisma.phoneNumber.findMany({
@@ -344,7 +357,7 @@ export async function POST(req: Request) {
           }
         }
         
-        await prisma.callLog.create({
+        const newLog = await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}`,
             publicId:        `bonvoice-${Date.now()}`,
@@ -365,6 +378,14 @@ export async function POST(req: Request) {
             historicalChannels: 1,
           },
         });
+        if (fallbackCompanyId && creditsUsed > 0) {
+          logsToCharge.push({
+            companyId: fallbackCompanyId,
+            callLogId: newLog.id,
+            credits: creditsUsed,
+            duration: durationSec,
+          });
+        }
       } else {
         // Pick SINGLE target candidate
         // If this is an INBOUND call, ONLY candidates assigned as INBOUND or BOTH are eligible.
@@ -454,25 +475,33 @@ export async function POST(req: Request) {
             historicalChannels: targetPhoneNumber.channels || 1,
           },
         });
-        if (targetPhoneNumber.companyId && creditsUsed > 0) {
-          logsToCharge.push({ companyId: targetPhoneNumber.companyId, callLogId: newLog.id });
+        const candidatePhoneDir = (targetPhoneNumber.direction || "").toUpperCase();
+        const isCandidateOutboundOnlyInbound = isInbound && isDirectionExplicit && candidatePhoneDir !== "INBOUND" && candidatePhoneDir !== "BOTH";
+        if (targetPhoneNumber.companyId && creditsUsed > 0 && !isCandidateOutboundOnlyInbound) {
+          logsToCharge.push({
+            companyId: targetPhoneNumber.companyId,
+            callLogId: newLog.id,
+            credits: creditsUsed,
+            duration: durationSec,
+          });
         }
-        console.log(`Bonvoice Hangup: Created SINGLE new call log ${newLog.id} → COMPLETED (${durationSec}s) company=${targetPhoneNumber.companyId}`);
+        console.log(`Bonvoice Hangup: Created SINGLE new call log ${newLog.id} → ${finalMappedStatus} (${durationSec}s) company=${targetPhoneNumber.companyId}`);
       }
     }
 
     // 4. Deduct credits for ALL companies involved
-    if (creditsUsed > 0 && logsToCharge.length > 0) {
+    if (logsToCharge.length > 0) {
       for (const charge of logsToCharge) {
+        if (charge.credits <= 0) continue;
         try {
           await prisma.$transaction(async (tx) => {
             await tx.creditUsage.create({
               data: {
                 companyId:   charge.companyId,
-                amount:      creditsUsed,
+                amount:      charge.credits,
                 reason:      "CALL",
                 callLogId:   charge.callLogId,
-                description: `${isInbound ? "Inbound" : "Outbound"} call (${durationSec}s, ${creditsUsed.toFixed(2)} credits)`,
+                description: `${isInbound ? "Inbound" : "Outbound"} call (${charge.duration}s, ${charge.credits.toFixed(2)} credits)`,
               },
             });
 
@@ -480,12 +509,12 @@ export async function POST(req: Request) {
               where:  { companyId: charge.companyId },
               create: {
                 companyId:        charge.companyId,
-                creditsRemaining: Math.max(0, -creditsUsed),
-                creditsUsed:      creditsUsed,
+                creditsRemaining: Math.max(0, -charge.credits),
+                creditsUsed:      charge.credits,
               },
               update: {
-                creditsRemaining: { decrement: creditsUsed },
-                creditsUsed:      { increment: creditsUsed },
+                creditsRemaining: { decrement: charge.credits },
+                creditsUsed:      { increment: charge.credits },
               },
             });
           });

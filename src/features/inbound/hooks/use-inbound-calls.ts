@@ -66,10 +66,10 @@ export function useInboundCalls() {
   useEffect(() => {
     fetchCalls(false);
     
-    // Poll every 5s for live updates without triggering the skeleton loader
+    // Poll silently every 2.5s for real-time updates without triggering loading spinners
     const id = setInterval(() => {
       fetchCalls(true);
-    }, 15000); // 15 seconds
+    }, 2500);
     
     return () => clearInterval(id);
   }, [fetchCalls]);
