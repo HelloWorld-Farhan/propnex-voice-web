@@ -319,13 +319,18 @@ export async function GET(req: NextRequest) {
       const isLive = LIVE_STATUSES.includes(call.status);
       const finalStatus = normalizeCallStatus(call.status, effectiveDurationSec, hasRecording, isLive);
 
+      // If a call is failed or missed without a recording, talk duration and credits are strictly 0
+      if ((finalStatus === "failed" || finalStatus === "missed") && !hasRecording) {
+        effectiveDurationSec = 0;
+      }
+
       const effMinutes = Math.floor(effectiveDurationSec / 60);
       const effSeconds = effectiveDurationSec % 60;
 
-      // Telephony credits calculation
-      let effectiveCredits = call.creditsUsed || 0;
-      if (effectiveCredits === 0 && finalStatus === "completed" && effectiveDurationSec > 0) {
-        effectiveCredits = calculateTelephonyCredits(effectiveDurationSec);
+      // Telephony credits calculation: ONLY completed calls with duration > 0 incur credits
+      let effectiveCredits = 0;
+      if (finalStatus === "completed" && effectiveDurationSec > 0) {
+        effectiveCredits = call.creditsUsed > 0 ? call.creditsUsed : calculateTelephonyCredits(effectiveDurationSec);
       }
 
       return {
@@ -338,7 +343,7 @@ export async function GET(req: NextRequest) {
         durationSeconds: effectiveDurationSec,
         status: finalStatus,
         creditsUsed: effectiveCredits,
-        recordingUrl: finalStatus === "failed" ? undefined : (call.recordingUrl || undefined),
+        recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],
         liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,

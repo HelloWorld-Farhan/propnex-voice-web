@@ -183,7 +183,7 @@ export function CallLogTable({
                     <StatusBadge status={call.status} />
                   </td>
                   <td className="px-4 py-3">
-                    {call.recordingUrl && call.status !== "failed" ? (
+                    {call.recordingUrl ? (
                       <RecordingPlayer
                         durationSeconds={realDurationSec > 0 ? realDurationSec : call.durationSeconds}
                         audioUrl={call.recordingUrl}

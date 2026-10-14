@@ -88,12 +88,6 @@ export async function POST(req: Request) {
     }
 
     let durationSec = parseInt(String(actualDuration)) || 0;
-    if (durationSec === 0 && StartTime && EndTime) {
-      const timeDiff = Math.round((endTimeParsed.getTime() - startTimeParsed.getTime()) / 1000);
-      if (timeDiff > 0 && timeDiff <= 3600) {
-        durationSec = timeDiff;
-      }
-    }
 
     let finalMappedStatus = "COMPLETED"; // default for hangup
     
@@ -138,17 +132,31 @@ export async function POST(req: Request) {
         effectiveStatus === "CONGESTION"
       ) {
         finalMappedStatus = "FAILED";
-      } else if (durationSec > 0) {
+      } else if (durationSec > 0 && effectiveStatus !== "NONE" && effectiveStatus !== "FAILED") {
         finalMappedStatus = "COMPLETED";
       } else {
         finalMappedStatus = "FAILED";
       }
     }
 
-    // Standardized credit calculation
+    // Only apply timeDiff if the call was answered/completed and has a recording or answered status!
+    // Never apply timeDiff to failed, missed, or channel-unavailable calls!
+    if (durationSec === 0 && finalMappedStatus === "COMPLETED" && (recordingUrl || effectiveStatus === "ANSWERED") && StartTime && EndTime) {
+      const timeDiff = Math.round((endTimeParsed.getTime() - startTimeParsed.getTime()) / 1000);
+      if (timeDiff > 0 && timeDiff <= 3600) {
+        durationSec = timeDiff;
+      }
+    }
+
+    // Failed or missed calls without a recording must strictly have 0 duration
+    if ((finalMappedStatus === "FAILED" || finalMappedStatus === "MISSED") && !recordingUrl) {
+      durationSec = 0;
+    }
+
+    // Standardized credit calculation: ONLY charge if call is COMPLETED and durationSec > 0!
     let creditsUsed = 0;
-    if (finalMappedStatus === "COMPLETED") {
-      creditsUsed = calculateTelephonyCredits(durationSec > 0 ? durationSec : 30);
+    if (finalMappedStatus === "COMPLETED" && durationSec > 0) {
+      creditsUsed = calculateTelephonyCredits(durationSec);
     }
 
     const didVariants = getPhoneVariants(didNumber);
@@ -268,11 +276,20 @@ export async function POST(req: Request) {
         }
 
         const isPrimary = log.id === primaryLog?.id;
-        const safeStatus = (log.recordingUrl || recordingUrl) ? "COMPLETED" : finalMappedStatus;
-        const safeDuration = (safeStatus === "COMPLETED" && durationSec === 0) 
-          ? (log.durationSeconds > 0 ? log.durationSeconds : 26) 
-          : (durationSec > 0 ? durationSec : log.durationSeconds);
-        const safeCredits = safeDuration > 0 ? Math.ceil(safeDuration / 30) * 1.75 : creditsUsed;
+        const hasRec = Boolean((log.recordingUrl || recordingUrl) && String(log.recordingUrl || recordingUrl).trim().length > 0);
+        const safeStatus = hasRec ? "COMPLETED" : finalMappedStatus;
+        
+        let safeDuration = 0;
+        if (safeStatus === "COMPLETED") {
+          safeDuration = durationSec > 0 ? durationSec : (log.durationSeconds > 0 ? log.durationSeconds : 26);
+        } else {
+          // Failed or missed calls without a recording must strictly have 0 duration
+          safeDuration = hasRec ? (durationSec > 0 ? durationSec : 26) : 0;
+        }
+
+        const safeCredits = (safeStatus === "COMPLETED" && safeDuration > 0 && !isOutboundOnlyInbound)
+          ? calculateTelephonyCredits(safeDuration)
+          : 0;
 
         await prisma.callLog.update({
           where: { id: log.id },
