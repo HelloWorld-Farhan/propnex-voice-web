@@ -11,7 +11,18 @@ export async function POST(req: Request) {
     }
 
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-    const phoneNumber = await prisma.phoneNumber.findUnique({ where: { id: phoneNumberId } });
+    const phoneNumber = await (prisma.phoneNumber.findUnique as any)({
+      where: { id: phoneNumberId },
+      select: {
+        id: true,
+        number: true,
+        channels: true,
+        agentUrl: true,   // The voicebot WSS URL configured per-number in admin panel
+        direction: true,
+        status: true,
+        companyId: true,
+      }
+    });
 
     if (!lead || !lead.phone) {
       return NextResponse.json({ error: "Lead or lead phone not found" }, { status: 404 });
@@ -37,9 +48,21 @@ export async function POST(req: Request) {
     // Authenticate with Bonvoice
     const token = await getBonvoiceToken();
 
-    // Outbound API logic using Bonvoice Click2Call or Voicebot API
     const baseUrl = process.env.BONVOICE_BASE_URL || "https://backend.pbx.bonvoice.com";
-    const template_url = process.env.BONVOICE_VOICEBOT_URL || "wss://vineeth-inbound.onrender.com/ws/voice-agent";
+
+    // Use the agentUrl configured per-number in the admin panel (Numbers → Outbound → Agent URL).
+    // Fall back to the global env var only if the DB field is empty.
+    // If neither is set, reject the call with a clear error.
+    const template_url =
+      (phoneNumber as any).agentUrl?.trim() ||
+      process.env.BONVOICE_VOICEBOT_URL?.trim();
+
+    if (!template_url) {
+      return NextResponse.json(
+        { error: "No Agent URL configured for this outbound number. Please set it in the admin panel under Numbers → Outbound." },
+        { status: 400 }
+      );
+    }
 
     // Create a pending call log record in our DB
     const callLogPublicId = `CL${Date.now()}-${phoneNumber.id.substring(0, 5)}`;
