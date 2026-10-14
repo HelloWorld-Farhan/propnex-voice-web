@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { Pause, Play, RotateCw } from "lucide-react";
+import { Check, Copy, Pause, Play, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,7 @@ type RecordingPlayerProps = {
   label?: string;
   compact?: boolean;
   className?: string;
+  showCopyUrl?: boolean;
   onDurationChange?: (actualDurationSec: number) => void;
 };
 
@@ -27,14 +28,41 @@ export function RecordingPlayer({
   label = "Recording",
   compact = false,
   className,
+  showCopyUrl = true,
   onDurationChange,
 }: RecordingPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleCopyUrl = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!audioUrl) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(audioUrl);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = audioUrl;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand("copy");
+        textArea.remove();
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy recording URL:", err);
+    }
+  };
 
   useEffect(() => {
     if (durationSeconds > 0) {
@@ -230,6 +258,26 @@ export function RecordingPlayer({
         <span className="text-xs tabular-nums text-muted-foreground min-w-[70px]">
           {formatTime(progress)} / {formatTime(currentDuration)}
         </span>
+        {showCopyUrl && audioUrl && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleCopyUrl}
+            className="h-6 px-1 text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded hover:bg-white/10"
+            title={copied ? "Copied recording URL!" : "Copy recording URL"}
+            aria-label={copied ? "Copied recording URL" : "Copy recording URL"}
+          >
+            {copied ? (
+              <>
+                <Check className="size-3 text-emerald-400" />
+                <span className="text-[10px] font-medium text-emerald-400">Copied</span>
+              </>
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </Button>
+        )}
       </div>
     );
   }
@@ -265,9 +313,34 @@ export function RecordingPlayer({
     >
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {formatTime(progress)} / {formatTime(currentDuration)}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {formatTime(progress)} / {formatTime(currentDuration)}
+          </span>
+          {showCopyUrl && audioUrl && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCopyUrl}
+              className="h-6 px-1.5 py-0 text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded border-border/70 bg-background/50 hover:bg-accent hover:text-accent-foreground transition-colors"
+              title={copied ? "Copied recording URL!" : "Copy recording URL"}
+              aria-label={copied ? "Copied recording URL" : "Copy recording URL"}
+            >
+              {copied ? (
+                <>
+                  <Check className="size-3 text-emerald-400" />
+                  <span className="text-[11px] font-medium text-emerald-400">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="size-3" />
+                  <span className="text-[11px] font-medium">Copy URL</span>
+                </>
+              )}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="h-1.5 overflow-hidden rounded-full bg-white/10">

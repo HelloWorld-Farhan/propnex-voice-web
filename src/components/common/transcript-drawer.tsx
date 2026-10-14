@@ -108,6 +108,7 @@ export function TranscriptDrawer({
                     durationSeconds={call.durationSeconds}
                     audioUrl={call.recordingUrl}
                     label="Call Audio Recording"
+                    showCopyUrl={true}
                   />
                 </div>
               )}
