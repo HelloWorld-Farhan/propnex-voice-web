@@ -313,13 +313,32 @@ export async function POST(req: Request) {
       });
 
       if (candidates.length === 0) {
-        console.warn("Bonvoice Hangup: No PhoneNumber matched in DB. Proceeding without company linkage.");
+        console.warn("Bonvoice Hangup: No PhoneNumber matched in DB. Attempting loose company lookup.");
+        
+        // Attempt to find company by loose DID match (search for any PhoneNumber containing DID digits)
+        let fallbackCompanyId: string | undefined = undefined;
+        if (didNumber) {
+          const didCore = corePhone(didNumber);
+          if (didCore) {
+            const looseMatch = await prisma.phoneNumber.findFirst({
+              where: { number: { contains: didCore } },
+              select: { companyId: true },
+              orderBy: { updatedAt: "desc" },
+            });
+            if (looseMatch?.companyId) {
+              fallbackCompanyId = looseMatch.companyId;
+              console.log(`Bonvoice Hangup: Found fallback company ${fallbackCompanyId} via loose DID match`);
+            }
+          }
+        }
+        
         await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}`,
             publicId:        `bonvoice-${Date.now()}`,
             direction:       isInbound ? "INBOUND" : "OUTBOUND",
             status:          finalMappedStatus as any,
+            companyId:       fallbackCompanyId,
             providerCallId:  callID ? String(callID) : undefined,
             startedAt:       startTimeParsed,
             endedAt:         endTimeParsed,

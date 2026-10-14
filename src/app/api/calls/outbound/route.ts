@@ -310,7 +310,10 @@ export async function GET(req: NextRequest) {
       // 6. Determine callType (generic for all users/companies):
       // - campaign:  campaignId is set  OR  correlationId starts with "camp-"
       // - lead:      correlationId starts with "reactivation-"  OR  leadId is set (call was placed to a known lead via OBD/manual)
-      // - internal:  no leadId, no campaignId, no camp-/reactivation- correlationId (pure manual dial)
+      // - internal:  no leadId, no campaignId, no camp-/reactivation- correlationId (pure manual dial, agent-to-agent, or external API call)
+      //
+      // IMPORTANT: Internal calls may have companyId (if DID matched) or companyId=null (if webhook created log without PhoneNumber match).
+      // Both scenarios are valid internal calls and should be displayed in the outbound dashboard.
       let callType: "lead" | "campaign" | "internal" = "internal";
       if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
         callType = "campaign";

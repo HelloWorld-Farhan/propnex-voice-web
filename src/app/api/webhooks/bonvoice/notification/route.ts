@@ -188,7 +188,25 @@ export async function POST(req: Request) {
       console.log(`Bonvoice Notification: DID variants [${didVariants.join(", ")}] → ${candidates.length} candidate(s) found.`);
 
       if (candidates.length === 0) {
-        console.warn("Bonvoice Notification: No PhoneNumber matched in DB. Proceeding without company linkage.");
+        console.warn("Bonvoice Notification: No PhoneNumber matched in DB. Attempting loose company lookup.");
+        
+        // Attempt to find company by loose DID match (search for any PhoneNumber containing DID digits)
+        let fallbackCompanyId: string | undefined = undefined;
+        if (didNumber) {
+          const didCore = corePhone(didNumber);
+          if (didCore) {
+            const looseMatch = await prisma.phoneNumber.findFirst({
+              where: { number: { contains: didCore } },
+              select: { companyId: true },
+              orderBy: { updatedAt: "desc" },
+            });
+            if (looseMatch?.companyId) {
+              fallbackCompanyId = looseMatch.companyId;
+              console.log(`Bonvoice Notification: Found fallback company ${fallbackCompanyId} via loose DID match`);
+            }
+          }
+        }
+        
         let parsedStartTime = new Date();
         if (StartTime) {
           const stStr = String(StartTime);
@@ -206,6 +224,7 @@ export async function POST(req: Request) {
             publicId:        `bonvoice-${Date.now()}`,
             direction:       isInbound ? "INBOUND" : "OUTBOUND",
             status:          mappedStatus as any,
+            companyId:       fallbackCompanyId,
             providerCallId:  callID ? String(callID) : undefined,
             startedAt:       parsedStartTime,
             answeredAt:      mappedStatus === "ANSWERED" ? new Date() : undefined,
