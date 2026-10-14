@@ -118,12 +118,24 @@ export function useOutboundCalls() {
   useEffect(() => {
     fetchCalls(false);
 
+    const onForceStop = () => {
+      fetchCalls(false);
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("propnex:campaign-force-stopped", onForceStop);
+    }
+
     // Background polling every 2 s for seamless real-time updates
     const id = setInterval(() => {
       fetchCalls(true);
     }, 2000);
 
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("propnex:campaign-force-stopped", onForceStop);
+      }
+    };
   }, [fetchCalls]);
 
   return {

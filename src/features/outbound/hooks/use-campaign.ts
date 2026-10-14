@@ -508,53 +508,96 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
 
   const forceStopCampaign = useCallback(async () => {
     try {
-      const storedUserStr = localStorage.getItem("user");
-      const user = storedUserStr ? JSON.parse(storedUserStr) : {};
-      const companyId = overrideCompanyId || user.companyId || null;
+      const storedUserStr = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      let user = storedUserStr ? JSON.parse(storedUserStr) : {};
+      let companyId = overrideCompanyId || user.companyId || (user.companies && user.companies[0]?.id) || null;
 
-      if (companyId) {
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
-        const pnxToken = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
+      const pnxToken = typeof window !== "undefined" ? (localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "") : "";
 
-        const response = await fetch(`${apiBase === '/api' ? '' : apiBase}/api/campaign-execution/force-stop`, {
+      if (!companyId && pnxToken) {
+        try {
+          const meRes = await fetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${pnxToken}` },
+            cache: "no-store",
+          });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData?.user) {
+              user = meData.user;
+              companyId = meData.user.companyId || (meData.user.companies && meData.user.companies[0]?.id) || null;
+              if (typeof window !== "undefined") {
+                localStorage.setItem("user", JSON.stringify(meData.user));
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Could not fetch user /me for companyId fallback:", fetchErr);
+        }
+      }
+
+      // Eagerly set UI campaign status to force_stopped
+      setCampaign(prev => ({
+        ...prev,
+        status: "force_stopped",
+        leads: (prev.leads || []).map(l => (l.called ? l : { ...l, isFailed: true }))
+      }));
+
+      // Call our Next.js force-stop route (which marks DB ringing calls FAILED and signals Redis/BullMQ)
+      const res = await fetch("/api/campaign-execution/force-stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${pnxToken}`
+        },
+        body: JSON.stringify({ companyId: companyId || undefined })
+      });
+
+      // Also call public backend directly if separate URL configured
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
+      if (apiBase !== "/api" && apiBase !== "") {
+        fetch(`${apiBase}/api/campaign-execution/force-stop`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${pnxToken}`
           },
-          body: JSON.stringify({ companyId })
-        });
-        
-        if (!response.ok) throw new Error("Backend failed to stop");
-        
-        const data = await response.json();
-        
-        // Let the websocket handle the actual state update to force_stopped
-        // But we can eagerly update it locally too
-        setCampaign(prev => ({ ...prev, status: "force_stopped" }));
-        
-        const latestState = data.state || campaign;
-        const processed = latestState.completedCalls || 0;
-        const successful = latestState.successfulCalls || 0;
-        const failed = latestState.failedCalls || 0;
-        
-        setAlertData({
-          title: "Campaign Force Stopped",
-          description: `Processed: ${processed} • Successful: ${successful} • Failed: ${failed}`,
-          isError: false,
-        });
+          body: JSON.stringify({ companyId: companyId || undefined })
+        }).catch(() => {});
+      }
+
+      let data: any = {};
+      if (res.ok) {
+        data = await res.json().catch(() => ({}));
+      }
+
+      const latestState = data?.state || campaign;
+      const processed = latestState.completedCalls || campaign.completedCalls || 0;
+      const successful = latestState.successfulCalls || campaign.successfulCalls || 0;
+      const failed = latestState.failedCalls || campaign.failedCalls || 0;
+
+      setAlertData({
+        title: "Campaign Force Stopped",
+        description: `Processed: ${processed} • Successful: ${successful} • Failed: ${failed}`,
+        isError: false,
+      });
+
+      // Notify call logs table to refetch immediately so all ringing calls show as Failed
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("propnex:campaign-force-stopped", { detail: { companyId } }));
       }
     } catch (err) {
-      console.error("Failed to force stop campaign on backend", err);
-      // Force clear locally to unblock the UI
+      console.error("Failed to force stop campaign:", err);
       setCampaign(prev => ({ ...prev, status: "force_stopped" }));
       setAlertData({
         title: "Campaign Force Stopped",
-        description: "Forced stopped locally.",
+        description: "Campaign forcefully stopped.",
         isError: false,
       });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("propnex:campaign-force-stopped"));
+      }
     }
-  }, [overrideCompanyId]);
+  }, [overrideCompanyId, campaign]);
 
   const progressPercent =
     campaign.totalContacts > 0
