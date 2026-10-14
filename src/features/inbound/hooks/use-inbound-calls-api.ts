@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 
 import type { CallLogFilters } from "@/types/call";
 import { type CallRecord } from "@/types/call";
@@ -149,6 +149,7 @@ const saveInboundCache = () => {
     } catch {}
   }
 };
+
 export function useInboundCallsApi(
   filters: CallLogFilters,
   page: number,
@@ -158,7 +159,11 @@ export function useInboundCallsApi(
   direction?: "inbound" | "outbound"
 ): UseInboundCallsApiState {
   const { search, status, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder } = filters;
-  const cacheKey = `calls_cache_v5_${direction}_${companyId}_${page}_${JSON.stringify(filters)}`;
+  const cacheKey = `calls_cache_v5_${direction || "inbound"}_${companyId || "default"}_${page}_${JSON.stringify(filters)}`;
+
+  const currentRequestIdRef = useRef(0);
+  const activePageRef = useRef(page);
+  activePageRef.current = page;
 
   const [state, setState] = useState<{
     rawItems: any[];
@@ -185,45 +190,21 @@ export function useInboundCallsApi(
     };
   });
 
-  const [prevCacheKey, setPrevCacheKey] = useState(cacheKey);
-  const [prevPage, setPrevPage] = useState(page);
   const [isChangingPage, setIsChangingPage] = useState(false);
-
-  if (prevPage !== page) {
-    setPrevPage(page);
-    setIsChangingPage(true);
-  }
-
-  if (prevCacheKey !== cacheKey) {
-    setPrevCacheKey(cacheKey);
-    const cached = inboundCache[cacheKey];
-    if (cached) {
-      setState({
-        rawItems: cached.rawItems,
-        rawTotal: cached.rawTotal,
-        rawTotalPages: cached.rawTotalPages,
-        loading: false,
-        error: null,
-      });
-    } else {
-      setState((prev) => ({
-        ...prev,
-        loading: true,
-        error: null,
-      }));
-    }
-  }
 
   useEffect(() => {
     let isCancelled = false;
-    let intervalId: ReturnType<typeof setInterval>;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    const thisRequestId = ++currentRequestIdRef.current;
+    const requestedPage = page;
 
     const load = async (isPolling = false) => {
-      // Check TTL — if cached data is fresh, skip loading state
+      // Check TTL — if cached data is fresh, skip initial spinner
       const cached = inboundCache[cacheKey];
       const isFresh = cached && (Date.now() - (cached.timestamp || 0)) < CACHE_TTL_MS;
 
       if (!isPolling) {
+        setIsChangingPage(true);
         if (!isFresh) {
           setState((prev) => ({ ...prev, loading: true, error: null }));
         }
@@ -232,7 +213,7 @@ export function useInboundCallsApi(
       try {
         const res: CallListApiResponse = await fetchInboundCalls({
           status: status !== "all" ? status : undefined,
-          page,
+          page: requestedPage,
           limit: PAGE_SIZE,
           companyId,
           direction: direction === "inbound" ? "INBOUND" : direction === "outbound" ? "OUTBOUND" : undefined,
@@ -247,7 +228,11 @@ export function useInboundCallsApi(
           sortOrder,
         });
 
-        if (isCancelled) return;
+        // STRICT: Discard stale response if a newer request was issued or page changed in the meantime
+        if (isCancelled || thisRequestId !== currentRequestIdRef.current || requestedPage !== activePageRef.current) {
+          return;
+        }
+
         setIsChangingPage(false);
 
         const items = res.data || [];
@@ -256,16 +241,18 @@ export function useInboundCallsApi(
           return s === "ringing" || s === "answered" || s === "queued";
         });
 
-        // Avoid unnecessary re-renders: if polling returns the exact same calls, do not update state
         setState((prev) => {
-          const prevSignature = prev.rawItems
-            .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
-            .join(",");
-          const nextSignature = items
-            .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
-            .join(",");
-          if (isPolling && prevSignature === nextSignature && prev.rawTotal === (res.meta?.total || 0)) {
-            return prev; // Skip re-render
+          // If polling returns identical data on the same page, skip state update to avoid re-renders
+          if (isPolling && requestedPage === activePageRef.current) {
+            const prevSignature = prev.rawItems
+              .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
+              .join(",");
+            const nextSignature = items
+              .map((x: any) => `${x.id || x.callId}_${x.status}_${x.durationSeconds}_${x.recordingUrl}`)
+              .join(",");
+            if (prevSignature === nextSignature && prev.rawTotal === (res.meta?.total || 0)) {
+              return prev;
+            }
           }
           return {
             rawItems: items,
@@ -287,21 +274,21 @@ export function useInboundCallsApi(
           saveInboundCache();
         }
 
-        // Smart polling: if there are live calls (RINGING/ANSWERED), poll every 2s.
-        // Otherwise, poll quietly every 3s in background to capture calls in near real-time!
-        clearInterval(intervalId);
-        const pollInterval = hasLiveCalls ? 2000 : 3000;
-        intervalId = setInterval(() => {
-          if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-            return;
-          }
-          void load(true);
-        }, pollInterval);
+        // Single clean interval scheduling
+        if (intervalId) clearInterval(intervalId);
+        if (!isCancelled && thisRequestId === currentRequestIdRef.current) {
+          const pollInterval = hasLiveCalls ? 2000 : 3000;
+          intervalId = setInterval(() => {
+            if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+              return;
+            }
+            void load(true);
+          }, pollInterval);
+        }
       } catch (err) {
-        if (isCancelled) return;
+        if (isCancelled || thisRequestId !== currentRequestIdRef.current) return;
         setIsChangingPage(false);
-        const message =
-          err instanceof Error ? err.message : "Failed to load inbound calls";
+        const message = err instanceof Error ? err.message : "Failed to load inbound calls";
         setState((prev) => ({
           ...prev,
           loading: false,
@@ -310,23 +297,15 @@ export function useInboundCallsApi(
       }
     };
 
-    void load();
-
-    // Default 3s background poll (pauses when browser tab is inactive)
-    intervalId = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-      void load(true);
-    }, 3000);
+    void load(false);
 
     return () => {
       isCancelled = true;
-      clearInterval(intervalId);
+      if (intervalId) clearInterval(intervalId);
     };
-  }, [status, page, retryKey, hasAssignedNumber, companyId, direction, search, assignedNumber, callerNumber, dateFrom, dateTo, minDuration, durationUnit, sortBy, sortOrder]);
+  }, [page, status, retryKey, hasAssignedNumber, companyId, direction, search, assignedNumber, callerNumber, dateFrom, dateTo, minDuration, durationUnit, sortBy, sortOrder, cacheKey]);
 
-  const fallbackAssignedNumber = "Unknown"; // Can fetch from localStorage if needed, omitted here to keep synchronous filtering fast.
+  const fallbackAssignedNumber = "Unknown";
 
   const processedState = useMemo(() => {
     let items = state.rawItems;
@@ -356,7 +335,7 @@ export function useInboundCallsApi(
       isChangingPage,
       error: state.error,
     };
-  }, [state, isChangingPage, search, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder]);
+  }, [state, isChangingPage]);
 
   return processedState;
 }

@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/common/empty-state";
 import { InboundFilters } from "@/features/inbound/components/inbound-filters";
 import { TranscriptDrawer } from "@/components/common/transcript-drawer";
 import { useInboundCallsApi } from "@/features/inbound/hooks/use-inbound-calls-api";
+import { useUserContext } from "@/features/auth/context/user-context";
 import {
   DEFAULT_CALL_FILTERS,
   type CallLogFilters,
@@ -142,6 +143,7 @@ export function InboundPageContent() {
     setPage(1);
   };
 
+  const { user } = useUserContext();
   const [page, setPage] = useState(1);
   const [retryKey, setRetryKey] = useState(0);
 
@@ -152,7 +154,7 @@ export function InboundPageContent() {
     loading,
     isChangingPage,
     error,
-  } = useInboundCallsApi(filters, page, retryKey, true);
+  } = useInboundCallsApi(filters, page, retryKey, true, user?.companyId, "inbound");
 
   const pageSize = 8;
 

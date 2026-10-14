@@ -149,8 +149,12 @@ export async function GET(req: NextRequest) {
             "Accept-Ranges": "bytes",
             "Content-Length": chunksize.toString(),
             "Content-Type": contentType,
+            "Content-Disposition": "inline",
             "Cache-Control": "public, max-age=86400, immutable",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+            "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
+            "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
           },
         });
       }
@@ -162,12 +166,33 @@ export async function GET(req: NextRequest) {
         "Accept-Ranges": "bytes",
         "Content-Length": totalLength.toString(),
         "Content-Type": contentType,
+        "Content-Disposition": "inline",
         "Cache-Control": "public, max-age=86400, immutable",
         "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
+        "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
       },
     });
   } catch (err: any) {
     console.error("Audio proxy error:", err);
-    return new NextResponse(err?.message || "Failed to fetch audio", { status: 502 });
+    return new NextResponse(err?.message || "Failed to fetch audio", { 
+      status: 502,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      }
+    });
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+      "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
+      "Access-Control-Max-Age": "86400",
+    },
+  });
 }

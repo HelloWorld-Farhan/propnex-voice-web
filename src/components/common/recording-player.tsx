@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 function formatTime(seconds: number) {
+  if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) return "0:00";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, "0")}`;
@@ -129,7 +130,7 @@ export function RecordingPlayer({
     }
 
     const audio = new Audio(proxyUrl);
-    audio.preload = "metadata";
+    audio.preload = "none"; // STRICT: Do not eagerly download whole file on mount
 
     const syncDuration = () => {
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
@@ -192,23 +193,25 @@ export function RecordingPlayer({
 
     audio.addEventListener("error", (e) => {
       setIsBuffering(false);
-      console.warn("Audio error encountered, attempting fallback:", e);
-      if (retryCountRef.current < 3) {
+      console.warn("Audio error encountered:", e);
+      if (retryCountRef.current < 2) {
         retryCountRef.current += 1;
-        const delay = 500;
         setTimeout(() => {
           if (audioRef.current && audioUrl) {
             try {
-              // Try direct audio URL on fallback if proxy had an issue
-              if (retryCountRef.current >= 2) {
-                audioRef.current.src = audioUrl;
-              } else {
-                audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
-              }
+              audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
               audioRef.current.load();
+              audioRef.current.play().then(() => {
+                setIsPlaying(true);
+                setIsBuffering(false);
+                setHasError(false);
+              }).catch(() => {
+                setIsBuffering(false);
+                setHasError(true);
+              });
             } catch {}
           }
-        }, delay);
+        }, 500);
         return;
       }
       setIsBuffering(false);
@@ -220,34 +223,14 @@ export function RecordingPlayer({
     return audio;
   }, [audioUrl, durationSeconds, onDurationChange]);
 
-  // Watchdog: Never allow the UI button to stay stuck on "Loading..." for > 3.5 seconds
+  // Watchdog: Never stay stuck on loading for > 5 seconds
   useEffect(() => {
     if (!isBuffering) return;
     const watchdog = setTimeout(() => {
       setIsBuffering(false);
-      if (audioRef.current && !isPlaying && audioUrl) {
-        // Fallback to direct URL if proxy is hanging
-        if (!audioRef.current.src.includes(audioUrl)) {
-          audioRef.current.src = audioUrl;
-          audioRef.current.play().then(() => {
-            setIsPlaying(true);
-          }).catch(() => {
-            setIsBuffering(false);
-          });
-        }
-      }
-    }, 3500);
+    }, 5000);
     return () => clearTimeout(watchdog);
-  }, [isBuffering, isPlaying, audioUrl]);
-
-  useEffect(() => {
-    if (audioUrl) {
-      const audio = getOrCreateAudio();
-      if (audio && audio.readyState === 0) {
-        audio.load();
-      }
-    }
-  }, [audioUrl, getOrCreateAudio]);
+  }, [isBuffering]);
 
   const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : 0);
 
@@ -267,7 +250,7 @@ export function RecordingPlayer({
         window.__propnexActivePlayerId = null;
       }
     } else {
-      // Immediately stop any other audio that is currently playing across the app
+      // Immediately stop any other audio currently playing across the app
       if (window.__propnexActiveAudio && window.__propnexActiveAudio !== audio) {
         try {
           window.__propnexActiveAudio.pause();
@@ -292,14 +275,16 @@ export function RecordingPlayer({
         setIsPlaying(true);
         setIsBuffering(false);
       }).catch((err) => {
-        console.warn("audio.play() rejected, attempting direct source fallback:", err);
+        console.warn("audio.play() failed:", err);
         setIsBuffering(false);
-        // Fallback directly to raw audioUrl if proxy playback had an issue
-        if (audioUrl && audio.src !== audioUrl) {
-          audio.src = audioUrl;
+        // Retry once via proxy with timestamp cache buster
+        if (retryCountRef.current < 2) {
+          retryCountRef.current += 1;
+          audio.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
           audio.play().then(() => {
             setIsPlaying(true);
             setIsBuffering(false);
+            setHasError(false);
           }).catch(() => {
             setIsBuffering(false);
             setHasError(true);
@@ -311,7 +296,8 @@ export function RecordingPlayer({
     }
   };
 
-  const handleRetry = () => {
+  const handleRetry = (e: React.MouseEvent) => {
+    e.stopPropagation();
     setHasError(false);
     setIsBuffering(false);
     retryCountRef.current = 0;
@@ -324,32 +310,45 @@ export function RecordingPlayer({
     }
     const audio = getOrCreateAudio(true);
     if (audio) {
-      audio.load();
+      handleToggle();
     }
   };
 
-  const progressPercent = currentDuration > 0 ? (progress / currentDuration) * 100 : 0;
+  const progressPercent = currentDuration > 0 ? Math.min(100, Math.max(0, (progress / currentDuration) * 100)) : 0;
 
   if (compact) {
     return (
       <div className={cn("flex items-center gap-2", className)}>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={handleToggle}
-          onMouseEnter={() => getOrCreateAudio()}
-          disabled={!audioUrl}
-          aria-label={isPlaying ? "Pause recording" : "Play recording"}
-          className="h-7 w-7 rounded-lg"
-        >
-          {isBuffering ? (
-            <span className="size-3.5 border-[1.5px] border-muted-foreground border-t-transparent rounded-full animate-spin" />
-          ) : isPlaying ? (
-            <Pause className="size-3.5" />
-          ) : (
-            <Play className="size-3.5" />
-          )}
-        </Button>
+        {hasError ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleRetry}
+            aria-label="Retry playing recording"
+            title="Click to retry playback"
+            className="h-7 w-7 rounded-lg text-amber-500 hover:text-amber-400 hover:bg-amber-500/10"
+          >
+            <RotateCw className="size-3.5" />
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="icon-sm"
+            type="button"
+            onClick={handleToggle}
+            disabled={!audioUrl}
+            aria-label={isPlaying ? "Pause recording" : "Play recording"}
+            className="h-7 w-7 rounded-lg transition-transform active:scale-95"
+          >
+            {isBuffering ? (
+              <span className="size-3.5 border-[1.5px] border-muted-foreground border-t-transparent rounded-full animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="size-3.5 text-primary" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+          </Button>
+        )}
         <span className="text-xs tabular-nums text-muted-foreground min-w-[70px]">
           {formatTime(progress)} / {formatTime(currentDuration)}
         </span>
@@ -418,36 +417,49 @@ export function RecordingPlayer({
 
       <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full rounded-full bg-foreground transition-all duration-300"
+          className="h-full rounded-full bg-primary transition-all duration-300"
           style={{ width: `${progressPercent}%` }}
         />
       </div>
 
-      <Button
-        variant={isPlaying ? "secondary" : "default"}
-        size="sm"
-        className="w-full"
-        onClick={handleToggle}
-        onMouseEnter={() => getOrCreateAudio()}
-        disabled={!audioUrl}
-      >
-        {isBuffering ? (
-          <>
-            <span className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-1" />
-            Loading...
-          </>
-        ) : isPlaying ? (
-          <>
-            <Pause className="size-4 mr-1" />
-            Pause
-          </>
-        ) : (
-          <>
-            <Play className="size-4 mr-1" />
-            Play Recording
-          </>
-        )}
-      </Button>
+      {hasError ? (
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          className="w-full text-amber-500 border-amber-500/30 hover:bg-amber-500/10"
+          onClick={handleRetry}
+        >
+          <RotateCw className="size-4 mr-1.5" />
+          Retry Playback
+        </Button>
+      ) : (
+        <Button
+          variant={isPlaying ? "secondary" : "default"}
+          size="sm"
+          type="button"
+          className="w-full"
+          onClick={handleToggle}
+          disabled={!audioUrl}
+        >
+          {isBuffering ? (
+            <>
+              <span className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
+              Loading...
+            </>
+          ) : isPlaying ? (
+            <>
+              <Pause className="size-4 mr-1.5" />
+              Pause
+            </>
+          ) : (
+            <>
+              <Play className="size-4 mr-1.5" />
+              Play Recording
+            </>
+          )}
+        </Button>
+      )}
     </div>
   );
 }

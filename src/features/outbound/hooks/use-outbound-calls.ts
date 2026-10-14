@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { DEFAULT_CALL_FILTERS, type CallLogFilters, type CallRecord } from "@/types/call";
 import { useUserContext } from "@/features/auth/context/user-context";
 
@@ -11,6 +11,9 @@ export function useOutboundCalls() {
   const [filters, setFilters] = useState<CallLogFilters>(DEFAULT_CALL_FILTERS);
 
   const [page, setPage] = useState(1);
+  const activePageRef = useRef(1);
+  const currentRequestIdRef = useRef(0);
+
   const [calls, setCalls] = useState<CallRecord[]>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -34,9 +37,14 @@ export function useOutboundCalls() {
   const [isChangingPage, setIsChangingPage] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSetPage = useCallback((newPage: number | ((prev: number) => number)) => {
-    setIsChangingPage(true);
-    setPage(newPage);
+  const handleSetPage = useCallback((newPageOrFn: number | ((prev: number) => number)) => {
+    setPage((prevPage) => {
+      const targetPage = typeof newPageOrFn === "function" ? newPageOrFn(prevPage) : newPageOrFn;
+      if (targetPage === prevPage) return prevPage;
+      activePageRef.current = targetPage;
+      setIsChangingPage(true);
+      return targetPage;
+    });
   }, []);
 
   const fetchCalls = useCallback(async (isBackground = false) => {
@@ -46,6 +54,9 @@ export function useOutboundCalls() {
       return;
     }
 
+    const thisRequestId = ++currentRequestIdRef.current;
+    const requestedPage = page;
+
     // On manual navigation (page change, filter change), indicate loading immediately
     if (!isBackground) {
       setLoading(true);
@@ -54,7 +65,7 @@ export function useOutboundCalls() {
     setError(null);
     try {
       const query = new URLSearchParams();
-      query.set("page", page.toString());
+      query.set("page", requestedPage.toString());
       query.set("limit", OUTBOUND_PAGE_SIZE.toString());
       query.set("companyId", user.companyId);
 
@@ -78,37 +89,47 @@ export function useOutboundCalls() {
       if (!res.ok) throw new Error("Failed to fetch calls");
       const data = await res.json();
 
+      // STRICT: Discard stale response if a newer request was issued or page changed in the meantime
+      if (thisRequestId !== currentRequestIdRef.current || requestedPage !== activePageRef.current) {
+        return;
+      }
+
       const newCalls = data.data || [];
       const newTotal = data.meta?.total || 0;
       const newPages = data.meta?.totalPages || 1;
 
       // Cache primary page results in localStorage so subsequent opens render instantly
-      if (page === 1 && (!filters.status || filters.status === "all") && !filters.search && !filters.callerNumber && !filters.assignedNumber) {
+      if (requestedPage === 1 && (!filters.status || filters.status === "all") && !filters.search && !filters.callerNumber && !filters.assignedNumber) {
         try {
           localStorage.setItem("propnex_outbound_calls_cache", JSON.stringify(newCalls));
           localStorage.setItem("propnex_outbound_total_cache", newTotal.toString());
         } catch {}
       }
 
-      // Prevent unnecessary re-renders: skip state update if background poll returns identical data
       setCalls((prev) => {
-        const prevSig = prev
-          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
-          .join(",");
-        const nextSig = newCalls
-          .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
-          .join(",");
-        if (isBackground && prevSig === nextSig) {
-          return prev;
+        // Only skip if background poll on the same page returns identical signatures
+        if (isBackground && requestedPage === activePageRef.current) {
+          const prevSig = prev
+            .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
+            .join(",");
+          const nextSig = newCalls
+            .map((c: any) => `${c.id || c.callId}_${c.status}_${c.durationSeconds}_${c.creditsUsed}_${c.recordingUrl}`)
+            .join(",");
+          if (prevSig === nextSig) {
+            return prev;
+          }
         }
         return newCalls;
       });
+
       setTotalCalls((prev) => (prev === newTotal ? prev : newTotal));
       setTotalPages((prev) => (prev === newPages ? prev : newPages));
     } catch (err: any) {
-      setError(err.message);
+      if (thisRequestId === currentRequestIdRef.current) {
+        setError(err.message);
+      }
     } finally {
-      if (!isBackground) {
+      if (thisRequestId === currentRequestIdRef.current) {
         setLoading(false);
         setIsChangingPage(false);
       }
@@ -116,7 +137,6 @@ export function useOutboundCalls() {
   }, [page, filters, user?.companyId]);
 
   // Immediately clear loading when user context becomes available (or is still absent)
-  // so we never stay stuck at "Loading outgoing calls…"
   useEffect(() => {
     if (!user?.companyId) {
       setLoading(false);
