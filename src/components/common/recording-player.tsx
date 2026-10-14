@@ -156,6 +156,18 @@ export function RecordingPlayer({
       retryCountRef.current = 0;
     });
 
+    audio.addEventListener("canplaythrough", () => {
+      setIsBuffering(false);
+    });
+
+    audio.addEventListener("waiting", () => {
+      setIsBuffering(true);
+    });
+
+    audio.addEventListener("stalled", () => {
+      setIsBuffering(false);
+    });
+
     audio.addEventListener("playing", () => {
       setIsBuffering(false);
       setIsPlaying(true);
@@ -178,14 +190,17 @@ export function RecordingPlayer({
       }
     });
 
-    audio.addEventListener("error", () => {
-      if (retryCountRef.current < 4) {
+    audio.addEventListener("error", (e) => {
+      setIsBuffering(false);
+      console.warn("Audio error encountered, attempting fallback:", e);
+      if (retryCountRef.current < 3) {
         retryCountRef.current += 1;
-        const delay = retryCountRef.current * 700;
+        const delay = 500;
         setTimeout(() => {
           if (audioRef.current && audioUrl) {
             try {
-              if (retryCountRef.current >= 3) {
+              // Try direct audio URL on fallback if proxy had an issue
+              if (retryCountRef.current >= 2) {
                 audioRef.current.src = audioUrl;
               } else {
                 audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
@@ -204,6 +219,26 @@ export function RecordingPlayer({
     audioRef.current = audio;
     return audio;
   }, [audioUrl, durationSeconds, onDurationChange]);
+
+  // Watchdog: Never allow the UI button to stay stuck on "Loading..." for > 3.5 seconds
+  useEffect(() => {
+    if (!isBuffering) return;
+    const watchdog = setTimeout(() => {
+      setIsBuffering(false);
+      if (audioRef.current && !isPlaying && audioUrl) {
+        // Fallback to direct URL if proxy is hanging
+        if (!audioRef.current.src.includes(audioUrl)) {
+          audioRef.current.src = audioUrl;
+          audioRef.current.play().then(() => {
+            setIsPlaying(true);
+          }).catch(() => {
+            setIsBuffering(false);
+          });
+        }
+      }
+    }, 3500);
+    return () => clearTimeout(watchdog);
+  }, [isBuffering, isPlaying, audioUrl]);
 
   useEffect(() => {
     if (audioUrl) {
@@ -257,21 +292,20 @@ export function RecordingPlayer({
         setIsPlaying(true);
         setIsBuffering(false);
       }).catch((err) => {
+        console.warn("audio.play() rejected, attempting direct source fallback:", err);
         setIsBuffering(false);
-        if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
-          console.error("Audio playback error:", err);
-          if (retryCountRef.current < 3) {
-            retryCountRef.current += 1;
-            setTimeout(() => {
-              if (audioUrl) {
-                audio.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
-                audio.load();
-                audio.play().catch(() => {});
-              }
-            }, 800);
-          } else {
+        // Fallback directly to raw audioUrl if proxy playback had an issue
+        if (audioUrl && audio.src !== audioUrl) {
+          audio.src = audioUrl;
+          audio.play().then(() => {
+            setIsPlaying(true);
+            setIsBuffering(false);
+          }).catch(() => {
+            setIsBuffering(false);
             setHasError(true);
-          }
+          });
+        } else {
+          setHasError(true);
         }
       });
     }

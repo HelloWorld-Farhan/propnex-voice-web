@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
           Accept: "audio/*,video/*,*/*",
         },
         redirect: "follow",
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       });
 
       if (!upstream.ok) {
