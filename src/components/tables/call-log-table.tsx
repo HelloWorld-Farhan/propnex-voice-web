@@ -197,16 +197,26 @@ export function CallLogTable({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
-                      disabled={!call.transcriptUrl || isLive}
-                      onClick={() => onViewTranscript(call)}
-                    >
-                      <FileText className="size-3.5" />
-                      View
-                    </Button>
+                    {(() => {
+                      const isViewable = !isLive && Boolean(
+                        call.status === "completed" ||
+                        call.recordingUrl ||
+                        call.transcriptUrl ||
+                        (call.transcript && call.transcript.length > 0)
+                      );
+                      return (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs text-foreground/80 hover:text-foreground hover:bg-muted"
+                          disabled={!isViewable}
+                          onClick={() => onViewTranscript(call)}
+                        >
+                          <FileText className="size-3.5" />
+                          View
+                        </Button>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums font-medium text-foreground">
                     {displayCredits}

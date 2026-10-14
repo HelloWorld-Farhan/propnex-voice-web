@@ -23,37 +23,53 @@ function formatCallDate(iso: string) {
 }
 
 import { useEffect, useState } from "react";
+import { RecordingPlayer } from "@/components/common/recording-player";
 
 export function TranscriptDrawer({
   call,
   open,
   onOpenChange,
 }: TranscriptDrawerProps) {
-  const [transcriptData, setTranscriptData] = useState<any[]>([]);
+  const [transcriptData, setTranscriptData] = useState<any[]>(call?.transcript || []);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (call?.transcript && call.transcript.length > 0) {
+      setTranscriptData(call.transcript);
+    }
+  }, [call]);
 
   useEffect(() => {
     if (open && call) {
       setLoading(true);
-      fetch(`/api/calls/${call.id}/transcript`)
+      const token = typeof window !== "undefined"
+        ? (localStorage.getItem("accessToken") || localStorage.getItem("access_token"))
+        : null;
+
+      fetch(`/api/calls/${call.id}/transcript`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
         .then((res) => {
           if (!res.ok) throw new Error("Transcript not found");
           return res.json();
         })
         .then((data) => {
-          // If the AI saves it as an array of messages or similar, map it
           if (Array.isArray(data)) {
             setTranscriptData(data);
-          } else if (data.messages && Array.isArray(data.messages)) {
-            setTranscriptData(data.messages);
           } else if (data.transcript && Array.isArray(data.transcript)) {
             setTranscriptData(data.transcript);
+          } else if (data.messages && Array.isArray(data.messages)) {
+            setTranscriptData(data.messages);
+          } else if (call?.transcript && call.transcript.length > 0) {
+            setTranscriptData(call.transcript);
           } else {
             setTranscriptData([]);
           }
         })
         .catch(() => {
-          setTranscriptData([]);
+          if (!call?.transcript || call.transcript.length === 0) {
+            setTranscriptData([]);
+          }
         })
         .finally(() => setLoading(false));
     }
@@ -87,7 +103,13 @@ export function TranscriptDrawer({
           <Separator />
             <div className="flex flex-col gap-3 py-2">
               {call.recordingUrl && (
-                <audio controls className="h-10 w-full" src={call.recordingUrl} />
+                <div className="rounded-xl border border-border bg-card p-3">
+                  <RecordingPlayer
+                    durationSeconds={call.durationSeconds}
+                    audioUrl={call.recordingUrl}
+                    label="Call Audio Recording"
+                  />
+                </div>
               )}
               {call.transcriptUrl && (
                 <a 
