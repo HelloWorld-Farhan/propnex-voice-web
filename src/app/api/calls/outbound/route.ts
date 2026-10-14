@@ -204,7 +204,9 @@ export async function GET(req: NextRequest) {
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
 
-    const shouldIncludeLive = !statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
+    // STRICT REQUIREMENT: Ringing / active calls must ONLY be prepended on Page 1.
+    // On Page 2, 3, etc., live calls are not prepended, displaying pure historical page data.
+    const shouldIncludeLive = page === 1 && (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered");
     const liveOutboundWhere: any = {
       direction: "OUTBOUND",
       OR: [

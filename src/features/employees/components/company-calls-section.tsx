@@ -734,8 +734,8 @@ export function CompanyCallsSection({
         </motion.div>
       )}
 
-      {/* ── Live call banner (inbound only) ── */}
-      {direction === "inbound" && <ActiveCallBanner calls={paginatedCalls} />}
+      {/* ── Live call banner (inbound, Page 1 only) ── */}
+      {direction === "inbound" && page === 1 && <ActiveCallBanner calls={paginatedCalls} />}
 
       <CallLogFiltersBar
         filters={filters}

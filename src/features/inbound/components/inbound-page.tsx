@@ -196,8 +196,8 @@ export function InboundPageContent() {
         </div>
       </motion.div>
 
-      {/* ── Active call live banner ── */}
-      <ActiveCallBanner calls={calls} />
+      {/* ── Active call live banner (Page 1 only) ── */}
+      {page === 1 && <ActiveCallBanner calls={calls} />}
 
       {/* ── Filters ── */}
       <InboundFilters

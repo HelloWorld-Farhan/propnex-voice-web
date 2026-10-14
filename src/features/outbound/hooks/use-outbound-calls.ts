@@ -39,8 +39,8 @@ export function useOutboundCalls() {
       return;
     }
 
-    // Only set loading to true if we don't have any cached calls to show
-    if (!isBackground && calls.length === 0) {
+    // On manual navigation (page change, filter change), indicate loading immediately
+    if (!isBackground) {
       setLoading(true);
     }
 
@@ -105,7 +105,7 @@ export function useOutboundCalls() {
         setLoading(false);
       }
     }
-  }, [page, filters, user?.companyId, calls.length]);
+  }, [page, filters, user?.companyId]);
 
   // Immediately clear loading when user context becomes available (or is still absent)
   // so we never stay stuck at "Loading outgoing calls…"

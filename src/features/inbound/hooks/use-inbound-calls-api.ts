@@ -184,6 +184,27 @@ export function useInboundCallsApi(
     };
   });
 
+  const [prevCacheKey, setPrevCacheKey] = useState(cacheKey);
+  if (prevCacheKey !== cacheKey) {
+    setPrevCacheKey(cacheKey);
+    const cached = inboundCache[cacheKey];
+    if (cached) {
+      setState({
+        rawItems: cached.rawItems,
+        rawTotal: cached.rawTotal,
+        rawTotalPages: cached.rawTotalPages,
+        loading: false,
+        error: null,
+      });
+    } else {
+      setState((prev) => ({
+        ...prev,
+        loading: true,
+        error: null,
+      }));
+    }
+  }
+
   useEffect(() => {
     let isCancelled = false;
     let intervalId: ReturnType<typeof setInterval>;
@@ -195,7 +216,7 @@ export function useInboundCallsApi(
 
       if (!isPolling) {
         if (!isFresh) {
-          setState((prev) => ({ ...prev, loading: prev.rawItems.length === 0, error: null }));
+          setState((prev) => ({ ...prev, loading: true, error: null }));
         }
       }
 
