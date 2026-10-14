@@ -26,7 +26,7 @@ import {
   StopCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -218,14 +218,24 @@ export function CampaignCard({
                   const reactDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + 1));
                   const reactDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(reactDate);
 
-                  // If reactivation was scheduled for a PAST day, it is sealed as Completed:
-                  if (reactDateStr < istDateStr) {
+                  // Wave 3 runs overnight across midnight into the next day.
+                  // Only seal Q3 if it was already Completed or if it is strictly more than 1 day past.
+                  const diffDays = Math.round((new Date(istDateStr).getTime() - new Date(reactDateStr).getTime()) / (24 * 60 * 60 * 1000));
+                  if (diffDays > 1 && item.q3?.status !== "Running") {
                     return {
                       ...item,
                       q1: { ...item.q1, status: "Completed" },
                       q2: { ...item.q2, status: "Completed" },
                       q3: { ...item.q3, status: "Completed" },
                       overallStatus: "Completed"
+                    };
+                  } else if (diffDays === 1) {
+                    // Q1 and Q2 from yesterday are completed (cutoffs were 2:30 PM and 7:30 PM)
+                    // But Q3 runs overnight until all leads contacted!
+                    return {
+                      ...item,
+                      q1: { ...item.q1, status: "Completed" },
+                      q2: { ...item.q2, status: "Completed" },
                     };
                   }
 
@@ -367,6 +377,29 @@ export function CampaignCard({
   const todayLeadsCount = todayBucket ? (todayBucket.q1?.failedLeads?.length || 0) : 0;
   const totalReactivationLeads = todayLeadsCount;
   const totalFailedLeadsHistory = historicalCampaigns.reduce((acc, curr) => acc + (curr.q1?.failedLeads?.length || 0), 0);
+
+  const runningWaveInfo = useMemo(() => {
+    if (!isReactivationCard || !historicalCampaigns) return null;
+    const LIVE_STATUSES = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+    for (const hist of historicalCampaigns) {
+      if (hist.q3?.status === "Running") {
+        const processed = (hist.q3.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || l.isAttempted || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
+        const total = hist.q3.failedLeads?.length || 0;
+        return { stage: "Q3", date: hist.csvName, processed, total };
+      }
+      if (hist.q2?.status === "Running") {
+        const processed = (hist.q2.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || l.isAttempted || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
+        const total = hist.q2.failedLeads?.length || 0;
+        return { stage: "Q2", date: hist.csvName, processed, total };
+      }
+      if (hist.q1?.status === "Running") {
+        const processed = (hist.q1.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || l.isAttempted || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
+        const total = hist.q1.failedLeads?.length || 0;
+        return { stage: "Q1", date: hist.csvName, processed, total };
+      }
+    }
+    return null;
+  }, [isReactivationCard, historicalCampaigns]);
 
   const pendingLeads = (campaign.leads || []).map((l: any, i: number) => ({ ...l, originalIdx: i })).filter((l: any) => !l.called);
   const successLeads = (campaign.leads || []).map((l: any, i: number) => ({ ...l, originalIdx: i })).filter((l: any) => l.called && !l.isFailed);
@@ -610,7 +643,20 @@ export function CampaignCard({
                       })() : status.label)}
               </Badge>
             )}
-            {isReactivationCard && campaign.qStage && campaign.qStatus && (
+            {isReactivationCard && runningWaveInfo ? (
+               <div className="flex gap-2 ml-2">
+                 <Badge 
+                    variant="outline" 
+                    className="text-xs font-semibold px-2.5 py-0.5 bg-blue-500/15 text-blue-500 border-blue-500/30 animate-pulse flex items-center gap-1.5"
+                 >
+                   <span className="relative flex size-2">
+                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                     <span className="relative inline-flex rounded-full size-2 bg-blue-500" />
+                   </span>
+                   Running {runningWaveInfo.stage} - {runningWaveInfo.processed} / {runningWaveInfo.total}
+                 </Badge>
+               </div>
+            ) : isReactivationCard && campaign.qStage && campaign.qStatus ? (
                <div className="flex gap-2 ml-2">
                  <Badge 
                     variant={campaign.qStatus === "Completed" ? "outline" : "default"} 
@@ -621,7 +667,7 @@ export function CampaignCard({
                       : `${campaign.qStatus} ${campaign.qStage}`}
                  </Badge>
                </div>
-            )}
+            ) : null}
             
             {(campaign.status !== "idle" && !isReactivationCard && campaign.leads && campaign.leads.length > 0) && (
               <div className="flex items-center gap-2 ml-2">
@@ -1135,11 +1181,15 @@ export function CampaignCard({
                             };
                             const getTotalCount = (wave: any) => wave?.failedLeads?.length || 0;
 
-                            const statusText = hist.q3?.status === "Completed" 
+                            // Prioritize Running wave first so live progress counter (X / total) is prominently shown!
+                            const statusText = hist.q3?.status === "Running"
+                              ? `Running - ${getProcessedCount(hist.q3)} / ${getTotalCount(hist.q3)} Q3`
+                              : hist.q2?.status === "Running"
+                              ? `Running - ${getProcessedCount(hist.q2)} / ${getTotalCount(hist.q2)} Q2`
+                              : hist.q1?.status === "Running"
+                              ? `Running - ${getProcessedCount(hist.q1)} / ${getTotalCount(hist.q1)} Q1`
+                              : hist.q3?.status === "Completed" 
                               ? "Completed" 
-                              : hist.q1?.status === "Running" ? `Running - ${getProcessedCount(hist.q1)} / ${getTotalCount(hist.q1)} Q1` 
-                              : hist.q2?.status === "Running" ? `Running - ${getProcessedCount(hist.q2)} / ${getTotalCount(hist.q2)} Q2` 
-                              : hist.q3?.status === "Running" ? `Running - ${getProcessedCount(hist.q3)} / ${getTotalCount(hist.q3)} Q3` 
                               : hist.q1?.status === "Pending" || hist.q1?.status === "Scheduled" ? `${hist.q1.status} Q1` 
                               : hist.q2?.status === "Pending" || hist.q2?.status === "Scheduled" ? `${hist.q2.status} Q2` 
                               : `${hist.q3?.status || "Pending"} Q3`;

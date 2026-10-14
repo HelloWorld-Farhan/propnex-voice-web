@@ -397,6 +397,17 @@ export async function GET(req: NextRequest) {
         q3Logs.map(l => l.lead?.phone?.replace(/\D/g, "").slice(-10)).filter(Boolean)
       );
 
+      // Wave 3 runs overnight until all leads are contacted.
+      // Q3 is ONLY finished if:
+      // 1. All leads attempted AND no calls are actively ringing/running.
+      // 2. OR more than 36h have passed since Q3 start time and it has been quiet for > 2 hours with no ringing calls.
+      const isQ3LongPast = nowMs > (b.q3Time.getTime() + 36 * 60 * 60 * 1000);
+      const allQ3AttemptedPreliminary = b.q1.failedLeads.length > 0 && b.q1.failedLeads.every((fl: any) => {
+        const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
+        return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
+      });
+      const q3FinishedPreliminary = !q3Running && (allQ3AttemptedPreliminary || (isQ3LongPast && q3QuietMs > 2 * 60 * 60 * 1000));
+
       const q1FinalList: any[] = [];
       const q2FinalList: any[] = [];
       const q3FinalList: any[] = [];
@@ -482,10 +493,10 @@ export async function GET(req: NextRequest) {
             if (q3IsStalePending && q3Log?.id) {
               prisma.callLog.update({ where: { id: q3Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
             }
-            const isRingingInQ3 = !isPastDay && !completedInQ3 && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
+            const isRingingInQ3 = !completedInQ3 && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
 
             const isAttemptedQ3 = !!q3Log;
-            const failedInQ3 = isPastDay
+            const failedInQ3 = q3FinishedPreliminary
               ? !completedInQ3
               : (!completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (isAttemptedQ3 && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus))));
 
@@ -521,7 +532,7 @@ export async function GET(req: NextRequest) {
           const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
           return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
         });
-        const q3Finished = isPastDay || (allQ3Attempted && !q3Running);
+        const q3Finished = !q3Running && (allQ3Attempted || (isQ3LongPast && q3QuietMs > 2 * 60 * 60 * 1000));
 
         if (q3Finished) {
           b.q3.status = "Completed";
@@ -550,8 +561,8 @@ export async function GET(req: NextRequest) {
 
       // Check if all leads are completed in Wave 3
       if (b.q3.status === "Running" && q3FinalList.length > 0) {
-        const allQ3Done = q3FinalList.every(l => l.isCompleted || l.isFailed);
-        if (allQ3Done) {
+        const allQ3Done = q3FinalList.every(l => l.isCompleted || (l.isAttempted && l.isFailed));
+        if (allQ3Done && !q3Running) {
           b.q3.status = "Completed";
         }
       }
@@ -614,8 +625,8 @@ export async function GET(req: NextRequest) {
         b.q3.status = "Completed";
       }
 
-      // Overall status: Past days are permanently Completed across all waves
-      if (isPastDay || b.q3.status === "Completed") {
+      // Overall status: Day is only sealed as Completed if Wave 3 has finished
+      if (b.q3.status === "Completed") {
         b.q1.status = "Completed";
         b.q2.status = "Completed";
         b.q3.status = "Completed";
