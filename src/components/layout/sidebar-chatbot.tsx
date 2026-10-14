@@ -103,16 +103,18 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
       }, 3200);
     };
 
+    let intervalId: NodeJS.Timeout | undefined;
+
     // Initial delay then start interval
     const initialDelay = setTimeout(() => {
       showNextBubble();
-      const intervalId = setInterval(showNextBubble, 7000);
-      return () => clearInterval(intervalId);
+      intervalId = setInterval(showNextBubble, 7000);
     }, 2000);
 
     return () => {
       clearTimeout(initialDelay);
       clearTimeout(timeoutId);
+      if (intervalId) clearInterval(intervalId);
     };
   }, [isOpen]);
 

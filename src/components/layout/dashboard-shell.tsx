@@ -4,7 +4,7 @@ import { DashboardHeader } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidebarChatbot } from "@/components/layout/sidebar-chatbot";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { EmployeesProvider } from "@/features/employees/context/employees-context";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { cn } from "@/lib/utils";
@@ -312,18 +312,22 @@ function DashboardShellInner({
     }
   };
 
+  const isFetchingUserRef = useRef(false);
+
   useEffect(() => {
     let isMounted = true;
 
     const fetchUser = async () => {
+      if (isFetchingUserRef.current) return;
+      isFetchingUserRef.current = true;
       try {
         const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token");
         if (!token) return;
 
-          const response = await fetch(`/api/users/me`, {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: "no-store"
-          });
+        const response = await fetch(`/api/users/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store"
+        });
         
         if (!isMounted) return;
 
@@ -378,12 +382,14 @@ function DashboardShellInner({
         }
       } catch (err) {
         console.error("Polling error:", err);
+      } finally {
+        isFetchingUserRef.current = false;
       }
     };
 
     fetchUser();
     
-    // Poll every 5 seconds for real-time credit & call updates (actually 30s)
+    // Poll every 30s for real-time credit & call updates
     const interval = setInterval(() => {
       fetchUser();
       const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token");
@@ -398,7 +404,7 @@ function DashboardShellInner({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isWaiting, isRejected, isWaitingNumber]);
+  }, []);
 
   useEffect(() => {
     // Redirect to billing if credits are zero or below to ensure they can't bypass the block

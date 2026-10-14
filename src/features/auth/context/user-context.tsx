@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react";
 
 type UserContextType = {
   user: any | null;
@@ -69,7 +69,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const isFetchingRef = useRef(false);
+
   const fetchFreshUser = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token");
       if (!token) {
@@ -87,8 +91,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
           applyUser(data.user);
         }
       }
-    } catch {}
-    setIsLoading(false);
+    } catch {} finally {
+      isFetchingRef.current = false;
+      setIsLoading(false);
+    }
   }, [applyUser]);
 
   const refreshUser = useCallback(() => {
