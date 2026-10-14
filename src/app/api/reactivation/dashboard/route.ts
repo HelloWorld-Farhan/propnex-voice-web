@@ -354,10 +354,7 @@ export async function GET(req: NextRequest) {
       });
 
       // Wave 1 (Q1 - 10:00 AM IST scheduled, 2:30 PM IST cutoff):
-      // A wave is Completed ONLY IF:
-      // 1. Cutoff time (2:30 PM IST) or past day has arrived
-      // 2. OR: ALL leads in Wave 1 have actually been dialed to completion (no ringing calls remaining)
-      const q1Finished = isPastQ1Cutoff || (allQ1Attempted && !q1Running);
+      const q1Finished = isPastQ1Cutoff || (allQ1Attempted && !q1Running) || (!q1Running && hasQ1Attempted && q1QuietMs > 10 * 60 * 1000);
 
       if (q1Finished) {
         b.q1.status = "Completed";
@@ -367,15 +364,34 @@ export async function GET(req: NextRequest) {
         b.q1.status = "Running";
       }
 
-      // STRICT TIMING: Wave 2 ONLY calculates AFTER 2:30 PM cutoff (or past day, or Wave 1 Completed)
-      const canRolloverToQ2 = isPastDay || isPastQ1Cutoff || b.q1.status === "Completed";
-      // STRICT TIMING: Wave 3 ONLY calculates AFTER 7:30 PM cutoff (or past day, or Wave 2 Completed)
-      const canRolloverToQ3 = isPastDay || isPastQ2Cutoff || b.q2.status === "Completed";
-
       // Fast set of attempted phones for Wave 2
       const q2AttemptedPhones = new Set(
         q2Logs.map(l => l.lead?.phone?.replace(/\D/g, "").slice(-10)).filter(Boolean)
       );
+
+      const allQ2Attempted = b.q1.failedLeads.length > 0 && b.q1.failedLeads.every((fl: any) => {
+        const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
+        return q2AttemptedPhones.has(core) || q2Logs.some(l => l.leadId === fl.id);
+      });
+
+      // Wave 2 is completed if:
+      // 1. Cutoff time (7:30 PM IST) or past day arrived
+      // 2. All leads in Wave 2 attempted and not actively ringing
+      // 3. Or queue has finished its dialed batch (no ringing calls, attempted calls exist, and quiet for >10 min)
+      const q2Finished = isPastQ2Cutoff || (allQ2Attempted && !q2Running) || (!q2Running && hasQ2Attempted && q2QuietMs > 10 * 60 * 1000);
+
+      const canRolloverToQ2 = isPastDay || isPastQ1Cutoff || q1Finished;
+      const canRolloverToQ3 = isPastDay || isPastQ2Cutoff || q2Finished;
+
+      if (!canRolloverToQ2) {
+        b.q2.status = "Pending";
+      } else if (q2Finished) {
+        b.q2.status = "Completed";
+      } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
+        b.q2.status = "Pending";
+      } else {
+        b.q2.status = "Running";
+      }
 
       // Fast set of attempted phones for Wave 3
       const q3AttemptedPhones = new Set(
@@ -487,23 +503,15 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Wave 2 Status Evaluation (3:00 PM IST scheduled, 7:30 PM IST cutoff)
+      // Wave 2 Status Evaluation
       if (!canRolloverToQ2) {
         b.q2.status = "Pending";
+      } else if (q2Finished) {
+        b.q2.status = "Completed";
+      } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
+        b.q2.status = "Pending";
       } else {
-        const allQ2Attempted = q2FinalList.length > 0 && q2FinalList.every((fl: any) => {
-          const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
-          return q2AttemptedPhones.has(core) || q2Logs.some(l => l.leadId === fl.id);
-        });
-        const q2Finished = isPastQ2Cutoff || (allQ2Attempted && !q2Running);
-
-        if (q2Finished) {
-          b.q2.status = "Completed";
-        } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
-          b.q2.status = "Pending";
-        } else {
-          b.q2.status = "Running";
-        }
+        b.q2.status = "Running";
       }
 
       // Wave 3 Status Evaluation (8:00 PM IST scheduled, 11:45 PM IST cutoff)
@@ -514,7 +522,7 @@ export async function GET(req: NextRequest) {
           const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
           return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
         });
-        const q3Finished = isPastQ3Cutoff || (allQ3Attempted && !q3Running);
+        const q3Finished = isPastQ3Cutoff || (allQ3Attempted && !q3Running) || (!q3Running && hasQ3Attempted && q3QuietMs > 10 * 60 * 1000);
 
         if (q3Finished) {
           b.q3.status = "Completed";

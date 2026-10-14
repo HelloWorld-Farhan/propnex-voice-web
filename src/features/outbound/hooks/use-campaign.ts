@@ -73,20 +73,39 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
     ignorePollingUntil.current = Date.now() + 5000;
 
     try {
-      const storedUserStr = localStorage.getItem("user");
-      const user = storedUserStr ? JSON.parse(storedUserStr) : {};
-      const companyId = overrideCompanyId || user.companyId || null;
+      const storedUserStr = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      let user = storedUserStr ? JSON.parse(storedUserStr) : {};
+      let companyId = overrideCompanyId || user.companyId || null;
+
+      const pnxToken = typeof window !== "undefined" ? (localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "") : "";
+
+      // Fallback: If companyId is not in localStorage, fetch /api/users/me immediately
+      if (!companyId && pnxToken) {
+        try {
+          const meRes = await fetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${pnxToken}` },
+            cache: "no-store",
+          });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData?.user) {
+              user = meData.user;
+              companyId = meData.user.companyId || null;
+              if (typeof window !== "undefined") {
+                localStorage.setItem("user", JSON.stringify(meData.user));
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Could not fetch user /me for companyId fallback:", fetchErr);
+        }
+      }
 
       if (user?.creditBalance?.creditsRemaining !== undefined && user.creditBalance.creditsRemaining <= 0) {
         throw new Error("Cannot start campaign. Your credit balance is 0. Please top up your account.");
       }
 
-      if (!companyId) {
-        throw new Error("Company ID not found");
-      }
-
       const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
-      const pnxToken = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
 
       // Ensure we have a DID number (it defaults to user's assigned numbers, but fallback to one if missing)
       const didNumber = campaign.selectedDid || (user.assignedNumbersDetailed && user.assignedNumbersDetailed[0]?.number) || "+917969007102";
@@ -98,7 +117,7 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
           Authorization: `Bearer ${pnxToken}`
         },
         body: JSON.stringify({
-          companyId,
+          companyId: companyId || undefined,
           campaignId: campaign.id,
           didNumber,
           leads: uniqueLeads,
@@ -108,8 +127,8 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || "Failed to start campaign");
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || "Failed to start campaign");
       }
 
       // Campaign successfully queued. The useEffect will handle state updates.
@@ -135,9 +154,27 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
 
     const connectWebSocket = async () => {
       try {
-        const storedUserStr = localStorage.getItem("user");
+        const storedUserStr = typeof window !== "undefined" ? localStorage.getItem("user") : null;
         const user = storedUserStr ? JSON.parse(storedUserStr) : {};
-        const companyId = overrideCompanyId || user.companyId || null;
+        let companyId = overrideCompanyId || user.companyId || null;
+
+        const pnxToken = typeof window !== "undefined" ? (localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "") : "";
+
+        if (!companyId && pnxToken) {
+          try {
+            const meRes = await fetch("/api/users/me", {
+              headers: { Authorization: `Bearer ${pnxToken}` },
+              cache: "no-store",
+            });
+            if (meRes.ok) {
+              const meData = await meRes.json();
+              if (meData?.user?.companyId) {
+                companyId = meData.user.companyId;
+                localStorage.setItem("user", JSON.stringify(meData.user));
+              }
+            }
+          } catch {}
+        }
 
         if (!companyId) {
           setIsInitializing(false);
@@ -247,7 +284,7 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
         socket.disconnect();
       }
     };
-  }, []);
+  }, [overrideCompanyId]);
 
   // Fallback HTTP polling in case WebSocket events are missed (e.g. dropped connection)
   useEffect(() => {

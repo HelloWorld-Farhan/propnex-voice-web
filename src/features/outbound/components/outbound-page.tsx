@@ -44,6 +44,8 @@ export function OutboundPageContent() {
     error,
   } = useOutboundCalls();
 
+  const { user, isLoading } = useUserContext();
+
   const {
     campaign: outboundCampaign,
     progressPercent,
@@ -59,12 +61,10 @@ export function OutboundPageContent() {
     alertData,
     setAlertData,
     isInitializing,
-  } = useCampaign();
+  } = useCampaign(undefined, user?.companyId);
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
-
-  const { user, isLoading } = useUserContext();
   
   // Use state to prevent flickering when user context reloads from stale localstorage
   const [hasOutboundNumber, setHasOutboundNumber] = useState(() => {
