@@ -147,7 +147,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const PENDING_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+    const LIVE_STATUSES = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
 
     const buckets: Record<string, any> = {};
     let currentKey = "";
@@ -295,9 +295,9 @@ export async function GET(req: NextRequest) {
       );
 
       // Check if any call is currently ringing/active in each wave
-      const q1Running = q1Logs.some(l => PENDING_STATUSES.includes(l.status?.toUpperCase() || ""));
-      const q2Running = q2Logs.some(l => PENDING_STATUSES.includes(l.status?.toUpperCase() || ""));
-      const q3Running = q3Logs.some(l => PENDING_STATUSES.includes(l.status?.toUpperCase() || ""));
+      const q1Running = q1Logs.some(l => LIVE_STATUSES.includes(l.status?.toUpperCase() || ""));
+      const q2Running = q2Logs.some(l => LIVE_STATUSES.includes(l.status?.toUpperCase() || ""));
+      const q3Running = q3Logs.some(l => LIVE_STATUSES.includes(l.status?.toUpperCase() || ""));
 
       const hasQ1Attempted = q1Logs.length > 0;
       const hasQ2Attempted = q2Logs.length > 0;
@@ -380,11 +380,11 @@ export async function GET(req: NextRequest) {
         const completedInQ1 = q1LogStatus === "COMPLETED" && (q1Log?.durationSeconds || 0) > 0;
         const q1LogAgeMs = q1Log?.startedAt ? (nowMs - new Date(q1Log.startedAt).getTime()) : 0;
         // Stale: pending for more than 15 minutes (was 5 min — too aggressive, killed live calls)
-        const q1IsStalePending = !!q1Log && PENDING_STATUSES.includes(q1LogStatus) && q1LogAgeMs > 15 * 60 * 1000;
+        const q1IsStalePending = !!q1Log && LIVE_STATUSES.includes(q1LogStatus) && q1LogAgeMs > 15 * 60 * 1000;
         if (q1IsStalePending && q1Log?.id) {
           prisma.callLog.update({ where: { id: q1Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
         }
-        const isRingingInQ1 = !completedInQ1 && !isPastDay && !!q1Log && PENDING_STATUSES.includes(q1LogStatus) && !q1IsStalePending;
+        const isRingingInQ1 = !completedInQ1 && !isPastDay && !!q1Log && LIVE_STATUSES.includes(q1LogStatus) && !q1IsStalePending;
 
         // If Wave 1 is Completed (past 2:30 PM cutoff or all dialed), non-completed leads are marked failed for Wave 1.
         // If Wave 1 is still Running (between 10:00 AM and 2:30 PM), ONLY leads actually attempted and failed are failed;
@@ -409,11 +409,11 @@ export async function GET(req: NextRequest) {
           const q2LogStatus = (q2Log?.status || "").toUpperCase();
           const completedInQ2 = q2LogStatus === "COMPLETED" && (q2Log?.durationSeconds || 0) > 0;
           const q2LogAgeMs = q2Log?.startedAt ? (nowMs - new Date(q2Log.startedAt).getTime()) : 0;
-          const q2IsStalePending = !!q2Log && PENDING_STATUSES.includes(q2LogStatus) && q2LogAgeMs > 15 * 60 * 1000;
+          const q2IsStalePending = !!q2Log && LIVE_STATUSES.includes(q2LogStatus) && q2LogAgeMs > 15 * 60 * 1000;
           if (q2IsStalePending && q2Log?.id) {
             prisma.callLog.update({ where: { id: q2Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
           }
-          const isRingingInQ2 = !completedInQ2 && !isPastDay && !!q2Log && PENDING_STATUSES.includes(q2LogStatus) && !q2IsStalePending;
+          const isRingingInQ2 = !completedInQ2 && !isPastDay && !!q2Log && LIVE_STATUSES.includes(q2LogStatus) && !q2IsStalePending;
 
           const isAttemptedQ2 = !!q2Log;
           const failedInQ2 = isPastQ2Cutoff
@@ -431,15 +431,15 @@ export async function GET(req: NextRequest) {
           q2FinalList.push(leadQ2Data);
 
           // ── Rollover to Wave 3: All leads that did not succeed in Wave 2 ──
-          if (!completedInQ2 && (failedInQ2 || isPastQ2Cutoff || hasQ2Attempted || nowMs >= b.q2Time.getTime())) {
+          if (!completedInQ2 && (failedInQ2 || isPastQ2Cutoff || hasQ2Attempted || nowMs >= b.q1Time.getTime())) {
             const q3LogStatus = (q3Log?.status || "").toUpperCase();
             const completedInQ3 = q3LogStatus === "COMPLETED" && (q3Log?.durationSeconds || 0) > 0;
             const q3LogAgeMs = q3Log?.startedAt ? (nowMs - new Date(q3Log.startedAt).getTime()) : 0;
-            const q3IsStalePending = !!q3Log && PENDING_STATUSES.includes(q3LogStatus) && q3LogAgeMs > 15 * 60 * 1000;
+            const q3IsStalePending = !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && q3LogAgeMs > 15 * 60 * 1000;
             if (q3IsStalePending && q3Log?.id) {
               prisma.callLog.update({ where: { id: q3Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
             }
-            const isRingingInQ3 = !completedInQ3 && !isPastQ3Cutoff && !!q3Log && PENDING_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
+            const isRingingInQ3 = !completedInQ3 && !isPastQ3Cutoff && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
 
             const isAttemptedQ3 = !!q3Log;
             const failedInQ3 = isPastQ3Cutoff
@@ -550,7 +550,7 @@ export async function GET(req: NextRequest) {
       const sortWave = (list: any[]) => {
         const getScore = (l: any) => {
           const status = (l.status || "").toUpperCase();
-          const isRinging = l.isRinging || PENDING_STATUSES.includes(status);
+          const isRinging = l.isRinging || LIVE_STATUSES.includes(status);
           if (isRinging) return 4;        // 1st: Running/Ringing call at TOP
           if (l.isCompleted) return 3;    // 2nd: Success
           if (l.isFailed) return 2;       // 3rd: Failed

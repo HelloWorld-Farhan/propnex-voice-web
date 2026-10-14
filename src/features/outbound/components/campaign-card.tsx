@@ -1108,9 +1108,14 @@ export function CampaignCard({
                       >
                         <div className="flex flex-col gap-1 items-start w-full">
                           {(() => {
+                            const LIVE_STATUSES = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
                             const getProcessedCount = (wave: any) => {
                               if (!wave?.failedLeads) return 0;
-                              return wave.failedLeads.filter((l: any) => l.isCompleted || l.isFailed || l.isRinging || l.isAttempted || (l.status && l.status !== "PENDING")).length;
+                              return wave.failedLeads.filter((l: any) => {
+                                if (l.isCompleted || l.isFailed || l.isAttempted) return true;
+                                const s = (l.status || "").toUpperCase();
+                                return !!l.isRinging || LIVE_STATUSES.includes(s);
+                              }).length;
                             };
                             const getTotalCount = (wave: any) => wave?.failedLeads?.length || 0;
 
@@ -1219,33 +1224,39 @@ export function CampaignCard({
                           { stage: "Q2", label: activeHist.q2?.label || "Wave 2", data: activeHist.q2 },
                           { stage: "Q3", label: activeHist.q3?.label || "Wave 3", data: activeHist.q3 }
                         ].map((wave, idx) => {
-                          const PENDING_CALL_STATUSES = ["PENDING", "RINGING", "IN-PROGRESS", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+                          const LIVE_CALLING_STATUSES = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
                           const isLeadRinging = (lead: any) => {
                             if (lead.isCompleted) return false;
                             const s = (lead.status || "").toUpperCase();
-                            return lead.isRinging || PENDING_CALL_STATUSES.includes(s);
+                            return !!lead.isRinging || LIVE_CALLING_STATUSES.includes(s);
                           };
 
-                          // Ringing leads are ALWAYS shown at top — never filtered by search query
-                          const ringingLeads = (wave.data.failedLeads || []).filter((l: any) => isLeadRinging(l));
+                          const allWaveLeads = wave.data?.failedLeads || [];
 
-                          const filteredLeads = (wave.data.failedLeads || []).filter((lead: any) => {
-                            // Ringing leads are always shown separately at top — exclude from filtered list to avoid duplicates
+                          // Ringing leads matching search (or all ringing leads if no search)
+                          const ringingLeads = allWaveLeads.filter((lead: any) => {
+                            if (!isLeadRinging(lead)) return false;
+                            if (!reactivationSearchQuery) return true;
+                            const q = reactivationSearchQuery.toLowerCase();
+                            const cleanQ = q.replace(/\D/g, '');
+                            const cleanPhone = (lead.phone || '').replace(/\D/g, '');
+                            return (cleanQ && cleanPhone.includes(cleanQ)) || (lead.name || '').toLowerCase().includes(q);
+                          });
+
+                          // Non-ringing leads matching search
+                          const filteredLeads = allWaveLeads.filter((lead: any) => {
                             if (isLeadRinging(lead)) return false;
                             if (!reactivationSearchQuery) return true;
                             const q = reactivationSearchQuery.toLowerCase();
                             const cleanQ = q.replace(/\D/g, '');
                             const cleanPhone = (lead.phone || '').replace(/\D/g, '');
-                            const phoneMatch = cleanQ && cleanPhone.includes(cleanQ);
-                            const nameMatch = (lead.name || '').toLowerCase().includes(q);
-                            return phoneMatch || nameMatch;
+                            return (cleanQ && cleanPhone.includes(cleanQ)) || (lead.name || '').toLowerCase().includes(q);
                           });
 
                           // STRICT USER REQUIREMENT SORTING:
-                          // 1st (Top): Ringing / Calling Now lead (already separated above)
-                          // 2nd: Success (Completed) leads
-                          // 3rd: Failed leads
-                          // 4th: Pending leads
+                          // 1st: Success (Completed) leads
+                          // 2nd: Failed leads
+                          // 3rd: Pending leads
                           const getLeadScore = (lead: any, waveStatus: string) => {
                             if (lead.isCompleted) return 3;
                             const isFailed = lead.isFailed || (waveStatus === "Completed" && !lead.isCompleted);
@@ -1262,9 +1273,8 @@ export function CampaignCard({
                           const paginatedLeads = nonRingingLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
 
-
-                          const processedCount = (wave.data.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
-                          const totalCount = (wave.data.failedLeads || []).length;
+                          const processedCount = allWaveLeads.filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
+                          const totalCount = allWaveLeads.length;
                           
                           return (
                           <div key={wave.stage} className="flex-1 flex flex-col border border-border/60 rounded-2xl bg-card overflow-hidden shadow-sm relative min-h-[300px] md:min-h-0">
@@ -1290,14 +1300,16 @@ export function CampaignCard({
                                 </Badge>
                               </div>
                               {(() => {
-                                const total = filteredLeads.length;
                                 const isPendingWave = wave.data.status === "Pending" || wave.data.status === "Scheduled";
                                 const isCompletedWave = wave.data.status === "Completed";
-                                const succeeded = filteredLeads.filter((l: any) => l.isCompleted).length;
+                                const leadsToCount = reactivationSearchQuery ? [...ringingLeads, ...filteredLeads] : allWaveLeads;
+                                const total = leadsToCount.length;
+                                const succeeded = leadsToCount.filter((l: any) => l.isCompleted).length;
                                 const failed = isCompletedWave
                                   ? Math.max(0, total - succeeded)
-                                  : filteredLeads.filter((l: any) => l.isFailed).length;
-                                const pending = Math.max(0, total - succeeded - failed);
+                                  : leadsToCount.filter((l: any) => l.isFailed && !l.isCompleted).length;
+                                const ringingNow = leadsToCount.filter((l: any) => isLeadRinging(l)).length;
+                                const pending = Math.max(0, total - succeeded - failed - ringingNow);
 
                                 if (isPendingWave) {
                                   return (
@@ -1308,7 +1320,7 @@ export function CampaignCard({
                                       </span>
                                       <span className="flex items-center gap-1.5">
                                         <span className="text-amber-500">Pending</span>
-                                        <span className="bg-amber-500/15 text-amber-500 px-2.5 py-0.5 rounded-full font-bold">{total}</span>
+                                        <span className="bg-amber-500/15 text-amber-500 px-2.5 py-0.5 rounded-full font-bold">{pending > 0 ? pending : total}</span>
                                       </span>
                                     </div>
                                   );
@@ -1341,7 +1353,7 @@ export function CampaignCard({
                             
                             {/* Wave Leads List */}
                             <div className="flex-1 overflow-y-auto p-2">
-                              {filteredLeads.length === 0 ? (
+                              {ringingLeads.length === 0 && paginatedLeads.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 p-6 text-center">
                                   <ListChecks className="size-8 mb-2 opacity-20" />
                                   <span className="text-sm">No leads found.</span>
