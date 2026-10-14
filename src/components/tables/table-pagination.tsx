@@ -1,8 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
 type TablePaginationProps = {
@@ -35,57 +34,79 @@ export function TablePagination({
   return (
     <div
       className={cn(
-        "flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between py-2",
         className
       )}
     >
-      <p className="text-sm text-muted-foreground">
-        Showing {start}–{end} of {totalItems} results
+      <p className="text-sm text-muted-foreground font-medium">
+        Showing <span className="text-foreground font-semibold">{start}</span>–<span className="text-foreground font-semibold">{end}</span> of{" "}
+        <span className="text-foreground font-semibold">{totalItems}</span> results
       </p>
 
-      <div className="flex items-center gap-1">
-        <Button
-          variant="outline"
-          size="icon-sm"
+      <div className="flex items-center gap-1.5">
+        <motion.button
+          whileHover={{ scale: page <= 1 ? 1 : 1.05 }}
+          whileTap={{ scale: page <= 1 ? 1 : 0.92 }}
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
           aria-label="Previous page"
+          className={cn(
+            "relative inline-flex items-center justify-center size-8 rounded-lg border border-border bg-background/80 text-foreground text-sm font-medium transition-colors shadow-xs",
+            "hover:bg-muted/80 hover:text-foreground active:bg-muted disabled:pointer-events-none disabled:opacity-40"
+          )}
         >
           <ChevronLeft className="size-4" />
-        </Button>
+        </motion.button>
 
         {pages.map((p, index) => {
           const prev = pages[index - 1];
           const showEllipsis = prev !== undefined && p - prev > 1;
+          const isActive = p === page;
 
           return (
             <span key={p} className="flex items-center gap-1">
               {showEllipsis && (
-                <span className="px-1 text-muted-foreground">…</span>
+                <span className="px-1 text-muted-foreground font-bold select-none">…</span>
               )}
-              <Button
-                variant={p === page ? "default" : "outline"}
-                size="icon-sm"
-                className={cn(p === page && "bg-primary text-primary-foreground")}
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.92 }}
                 onClick={() => onPageChange(p)}
                 aria-label={`Page ${p}`}
-                aria-current={p === page ? "page" : undefined}
+                aria-current={isActive ? "page" : undefined}
+                className={cn(
+                  "relative inline-flex items-center justify-center min-w-8 h-8 px-2 rounded-lg text-sm font-medium transition-colors shadow-xs",
+                  isActive
+                    ? "text-primary-foreground font-semibold"
+                    : "border border-border bg-background/80 text-foreground hover:bg-muted/80 hover:text-foreground"
+                )}
               >
-                {p}
-              </Button>
+                {isActive && (
+                  <motion.div
+                    layoutId="pagination-active-pill"
+                    className="absolute inset-0 rounded-lg bg-primary shadow-sm"
+                    transition={{ type: "spring", stiffness: 450, damping: 32 }}
+                  />
+                )}
+                <span className="relative z-10">{p}</span>
+              </motion.button>
             </span>
           );
         })}
 
-        <Button
-          variant="outline"
-          size="icon-sm"
+        <motion.button
+          whileHover={{ scale: page >= totalPages ? 1 : 1.05 }}
+          whileTap={{ scale: page >= totalPages ? 1 : 0.92 }}
           disabled={page >= totalPages}
           onClick={() => onPageChange(page + 1)}
           aria-label="Next page"
+          className={cn(
+            "relative inline-flex items-center justify-center size-8 rounded-lg border border-border bg-background/80 text-foreground text-sm font-medium transition-colors shadow-xs",
+            "hover:bg-muted/80 hover:text-foreground active:bg-muted disabled:pointer-events-none disabled:opacity-40"
+          )}
         >
           <ChevronRight className="size-4" />
-        </Button>
+        </motion.button>
       </div>
     </div>
   );

@@ -891,6 +891,8 @@ model CallLog {
   @@unique([companyId, callLogId])
   @@unique([companyId, publicId])
   @@index([companyId, startedAt])
+  @@index([companyId, direction, startedAt])
+  @@index([companyId, direction, status, startedAt])
   @@index([companyId, status, startedAt])
   @@index([companyId, leadId])
   @@index([companyId, aiAgentId])

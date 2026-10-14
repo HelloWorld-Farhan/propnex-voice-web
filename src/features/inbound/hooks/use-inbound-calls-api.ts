@@ -15,6 +15,7 @@ type UseInboundCallsApiState = {
   total: number;
   totalPages: number;
   loading: boolean;
+  isChangingPage?: boolean;
   error: string | null;
 };
 
@@ -185,6 +186,14 @@ export function useInboundCallsApi(
   });
 
   const [prevCacheKey, setPrevCacheKey] = useState(cacheKey);
+  const [prevPage, setPrevPage] = useState(page);
+  const [isChangingPage, setIsChangingPage] = useState(false);
+
+  if (prevPage !== page) {
+    setPrevPage(page);
+    setIsChangingPage(true);
+  }
+
   if (prevCacheKey !== cacheKey) {
     setPrevCacheKey(cacheKey);
     const cached = inboundCache[cacheKey];
@@ -239,6 +248,7 @@ export function useInboundCallsApi(
         });
 
         if (isCancelled) return;
+        setIsChangingPage(false);
 
         const items = res.data || [];
         const hasLiveCalls = items.some((item: any) => {
@@ -281,9 +291,15 @@ export function useInboundCallsApi(
         // Otherwise, poll quietly every 3s in background to capture calls in near real-time!
         clearInterval(intervalId);
         const pollInterval = hasLiveCalls ? 2000 : 3000;
-        intervalId = setInterval(() => void load(true), pollInterval);
+        intervalId = setInterval(() => {
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+            return;
+          }
+          void load(true);
+        }, pollInterval);
       } catch (err) {
         if (isCancelled) return;
+        setIsChangingPage(false);
         const message =
           err instanceof Error ? err.message : "Failed to load inbound calls";
         setState((prev) => ({
@@ -296,8 +312,13 @@ export function useInboundCallsApi(
 
     void load();
 
-    // Default 3s background poll
-    intervalId = setInterval(() => void load(true), 3000);
+    // Default 3s background poll (pauses when browser tab is inactive)
+    intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      void load(true);
+    }, 3000);
 
     return () => {
       isCancelled = true;
@@ -332,9 +353,10 @@ export function useInboundCallsApi(
       total: state.rawTotal,
       totalPages: state.rawTotalPages,
       loading: state.loading,
+      isChangingPage,
       error: state.error,
     };
-  }, [state, search, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder]);
+  }, [state, isChangingPage, search, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder]);
 
   return processedState;
 }

@@ -13,6 +13,19 @@ const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const countCache = new Map<string, { count: number; expiresAt: number }>();
+
+function getCachedCount(key: string, fetcher: () => Promise<number>): Promise<number> {
+  const cached = countCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return Promise.resolve(cached.count);
+  }
+  return fetcher().then((count) => {
+    countCache.set(key, { count, expiresAt: Date.now() + 15000 });
+    return count;
+  });
+}
+
 export async function GET(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
@@ -220,18 +233,26 @@ export async function GET(req: NextRequest) {
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
     };
 
+    // Lightweight count cache for fast paginations without repeated countDocuments
+    const hasFilters = Boolean(
+      (statusParam && statusParam.toLowerCase() !== "all") ||
+      assignedNumber || callerNumber || dateFrom || dateTo || minDuration || search || freshStartAfter
+    );
+
+    const countPromise = hasFilters
+      ? prisma.callLog.count({ where: whereClause })
+      : getCachedCount(`outbound_count_${companyIdsToQuery.join("_")}`, () => prisma.callLog.count({ where: whereClause }));
+
     const [total, calls, liveCalls] = await Promise.all([
-      prisma.callLog.count({ where: whereClause }),
+      countPromise,
       prisma.callLog.findMany({
         where: whereClause,
         orderBy: prismaOrderBy,
         skip,
         take: limit,
         include: {
-          phoneNumber: true,
-          lead: true,
-          campaign: { include: { phoneNumbers: { take: 1 } } },
-          company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } },
+          phoneNumber: { select: { id: true, number: true } },
+          lead: { select: { id: true, phone: true } },
         },
       }),
       shouldIncludeLive
@@ -240,10 +261,8 @@ export async function GET(req: NextRequest) {
             orderBy: { startedAt: "desc" },
             take: 20,
             include: {
-              phoneNumber: true,
-              lead: true,
-              campaign: { include: { phoneNumbers: { take: 1 } } },
-              company: { include: { phoneNumbers: { where: { direction: { in: ["OUTBOUND", "BOTH"] } }, take: 1 } } },
+              phoneNumber: { select: { id: true, number: true } },
+              lead: { select: { id: true, phone: true } },
             },
           })
         : Promise.resolve([]),
@@ -293,8 +312,7 @@ export async function GET(req: NextRequest) {
         if (!fallbackCustomerNumber && parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
       }
 
-      const campaignDid = cleanPhone((call as any).campaign?.phoneNumbers?.[0]?.number);
-      const companyDid = cleanPhone((call as any).company?.phoneNumbers?.[0]?.number);
+      const fallbackCompanyDid = cleanPhone(companyPhoneNumbers[0]?.number);
 
       // Canonical call type classification
       const callType = determineCallType(call);
@@ -334,7 +352,7 @@ export async function GET(req: NextRequest) {
         id: call.id,
         callId: call.callLogId,
         customerNumber: cleanPhone(call.lead?.phone) || fallbackCustomerNumber || "",
-        assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || fallbackAssignedNumber || campaignDid || companyDid || "",
+        assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || fallbackAssignedNumber || fallbackCompanyDid || "",
         callDateTime: call.startedAt.toISOString(),
         duration: effMinutes > 0 ? `${effMinutes}m ${effSeconds}s` : `${effSeconds}s`,
         durationSeconds: effectiveDurationSec,

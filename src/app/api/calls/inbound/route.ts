@@ -6,6 +6,19 @@ const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const countCache = new Map<string, { count: number; expiresAt: number }>();
+
+function getCachedCount(key: string, fetcher: () => Promise<number>): Promise<number> {
+  const cached = countCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return Promise.resolve(cached.count);
+  }
+  return fetcher().then((count) => {
+    countCache.set(key, { count, expiresAt: Date.now() + 15000 });
+    return count;
+  });
+}
+
 function getCoreNumber(num: string) {
   if (!num) return "";
   let d = num.replace(/\D/g, "").replace(/^0+/, "");
@@ -190,8 +203,6 @@ export async function GET(req: NextRequest) {
       whereClause.AND = andConditions;
     }
 
-    console.log("INBOUND_API: whereClause is:", JSON.stringify(whereClause, null, 2));
-
     // STRICT REQUIREMENT: Ringing / active calls must ONLY be prepended on Page 1.
     // On Page 2, 3, etc., live calls are not prepended, displaying pure historical page data.
     const shouldIncludeLive = page === 1 && (!statusParam || statusParam === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered");
@@ -208,21 +219,36 @@ export async function GET(req: NextRequest) {
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
 
+    const hasFilters = Boolean(
+      (statusParam && statusParam.toLowerCase() !== "all") ||
+      assignedNumber || callerNumber || dateFrom || dateTo || minDuration || search
+    );
+
+    const countPromise = hasFilters
+      ? prisma.callLog.count({ where: whereClause })
+      : getCachedCount(`inbound_count_${companyIdsToQuery.join("_")}_${directionVal}`, () => prisma.callLog.count({ where: whereClause }));
+
     const [total, calls, liveCalls] = await Promise.all([
-      prisma.callLog.count({ where: whereClause }),
+      countPromise,
       prisma.callLog.findMany({
         where: whereClause,
         orderBy: prismaOrderBy,
         skip,
         take: limit,
-        include: { phoneNumber: true, lead: true },
+        include: {
+          phoneNumber: { select: { id: true, number: true } },
+          lead: { select: { id: true, phone: true } },
+        },
       }),
       shouldIncludeLive
         ? prisma.callLog.findMany({
             where: liveWhereClause,
             orderBy: { startedAt: "desc" },
             take: 10,
-            include: { phoneNumber: true, lead: true },
+            include: {
+              phoneNumber: { select: { id: true, number: true } },
+              lead: { select: { id: true, phone: true } },
+            },
           })
         : Promise.resolve([]),
     ]);

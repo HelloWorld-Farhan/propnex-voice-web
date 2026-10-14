@@ -31,11 +31,18 @@ export function useOutboundCalls() {
   });
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [isChangingPage, setIsChangingPage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleSetPage = useCallback((newPage: number | ((prev: number) => number)) => {
+    setIsChangingPage(true);
+    setPage(newPage);
+  }, []);
 
   const fetchCalls = useCallback(async (isBackground = false) => {
     if (!user?.companyId) {
       setLoading(false);
+      setIsChangingPage(false);
       return;
     }
 
@@ -103,6 +110,7 @@ export function useOutboundCalls() {
     } finally {
       if (!isBackground) {
         setLoading(false);
+        setIsChangingPage(false);
       }
     }
   }, [page, filters, user?.companyId]);
@@ -125,10 +133,13 @@ export function useOutboundCalls() {
       window.addEventListener("propnex:campaign-force-stopped", onForceStop);
     }
 
-    // Background polling every 2 s for seamless real-time updates
+    // Background polling every 2.5s for seamless real-time updates (pauses if tab is hidden)
     const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
       fetchCalls(true);
-    }, 2000);
+    }, 2500);
 
     return () => {
       clearInterval(id);
@@ -140,15 +151,16 @@ export function useOutboundCalls() {
 
   return {
     filters,
-    updateFilters: (next: CallLogFilters) => { setFilters(next); setPage(1); },
-    resetFilters: () => { setFilters(DEFAULT_CALL_FILTERS); setPage(1); },
+    updateFilters: (next: CallLogFilters) => { setFilters(next); handleSetPage(1); },
+    resetFilters: () => { setFilters(DEFAULT_CALL_FILTERS); handleSetPage(1); },
     calls,
     totalCalls,
     page,
     totalPages,
     pageSize: OUTBOUND_PAGE_SIZE,
-    setPage,
+    setPage: handleSetPage,
     loading,
+    isChangingPage,
     error,
     handleRetry: fetchCalls,
   };

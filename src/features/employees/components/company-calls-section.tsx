@@ -514,6 +514,7 @@ export function CompanyCallsSection({
     total: totalItems,
     totalPages,
     loading,
+    isChangingPage,
     error,
   } = useInboundCallsApi(filters, page, 0, true, companyId, direction);
 
@@ -768,6 +769,7 @@ export function CompanyCallsSection({
             calls={paginatedCalls}
             variant={direction}
             onViewTranscript={handleViewTranscript}
+            isChangingPage={isChangingPage}
           />
           <TablePagination
             page={page}

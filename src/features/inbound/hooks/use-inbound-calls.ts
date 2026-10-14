@@ -15,7 +15,13 @@ export function useInboundCalls() {
   const [totalCalls, setTotalCalls] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [isChangingPage, setIsChangingPage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleSetPage = useCallback((newPage: number | ((prev: number) => number)) => {
+    setIsChangingPage(true);
+    setPage(newPage);
+  }, []);
 
   const fetchCalls = useCallback(async (isBackground = false) => {
     if (!user?.companyId) return;
@@ -59,6 +65,7 @@ export function useInboundCalls() {
     } finally {
       if (!isBackground) {
         setLoading(false);
+        setIsChangingPage(false);
       }
     }
   }, [page, filters, user?.companyId]);
@@ -66,8 +73,11 @@ export function useInboundCalls() {
   useEffect(() => {
     fetchCalls(false);
     
-    // Poll silently every 2.5s for real-time updates without triggering loading spinners
+    // Poll silently every 2.5s for real-time updates (pauses if tab is hidden)
     const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
       fetchCalls(true);
     }, 2500);
     
@@ -76,15 +86,16 @@ export function useInboundCalls() {
 
   return {
     filters,
-    updateFilters: (next: CallLogFilters) => { setFilters(next); setPage(1); },
-    resetFilters: () => { setFilters(DEFAULT_CALL_FILTERS); setPage(1); },
+    updateFilters: (next: CallLogFilters) => { setFilters(next); handleSetPage(1); },
+    resetFilters: () => { setFilters(DEFAULT_CALL_FILTERS); handleSetPage(1); },
     calls,
     totalCalls,
     page,
     totalPages,
     pageSize: INBOUND_PAGE_SIZE,
-    setPage,
+    setPage: handleSetPage,
     loading,
+    isChangingPage,
     error,
     handleRetry: fetchCalls
   };

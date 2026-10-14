@@ -41,6 +41,7 @@ export function OutboundPageContent() {
     pageSize,
     setPage,
     loading,
+    isChangingPage,
     error,
   } = useOutboundCalls();
 
@@ -687,6 +688,7 @@ export function OutboundPageContent() {
                 calls={calls}
                 variant="outbound"
                 onViewTranscript={handleViewTranscript}
+                isChangingPage={isChangingPage}
               />
               <TablePagination
                 page={page}

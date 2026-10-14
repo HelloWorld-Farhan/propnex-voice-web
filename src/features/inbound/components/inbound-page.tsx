@@ -150,6 +150,7 @@ export function InboundPageContent() {
     total,
     totalPages,
     loading,
+    isChangingPage,
     error,
   } = useInboundCallsApi(filters, page, retryKey, true);
 
@@ -226,6 +227,7 @@ export function InboundPageContent() {
             calls={calls}
             variant="inbound"
             onViewTranscript={handleViewTranscript}
+            isChangingPage={isChangingPage}
           />
           <TablePagination
             page={page}

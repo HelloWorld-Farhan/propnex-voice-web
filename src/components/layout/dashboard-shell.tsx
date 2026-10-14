@@ -10,6 +10,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 import { cn } from "@/lib/utils";
 import { usePathname, useRouter } from "next/navigation";
 import { useBrand } from "@/components/providers/brand-provider";
+import { motion, AnimatePresence } from "framer-motion";
 
 type DashboardShellProps = {
   children: React.ReactNode;
@@ -661,7 +662,17 @@ function DashboardShellInner({
               </div>
             )}
 
-            {children}
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={pathname}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+              >
+                {children}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </main>
       </div>
