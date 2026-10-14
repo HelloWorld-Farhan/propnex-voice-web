@@ -40,9 +40,10 @@ type StatusBadgeProps = VariantProps<typeof statusBadgeVariants> & {
 };
 
 export function StatusBadge({ status = "pending", className }: StatusBadgeProps) {
-  const safeStatus = (status ?? "pending") as keyof typeof statusConfig;
-  const config = statusConfig[safeStatus] || { label: String(status || "Unknown"), variant: "secondary" };
-  const isLive = status === "ringing" || status === "answered";
+  const norm = String(status || "pending").toLowerCase().trim();
+  const safeStatus = norm as keyof typeof statusConfig;
+  const config = statusConfig[safeStatus] || { label: norm.charAt(0).toUpperCase() + norm.slice(1), variant: "secondary" };
+  const isLive = norm === "ringing" || norm === "answered";
 
   return (
     <Badge variant={config.variant} className={cn("gap-1.5", className)}>

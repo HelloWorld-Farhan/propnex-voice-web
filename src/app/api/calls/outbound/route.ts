@@ -362,9 +362,11 @@ export async function GET(req: NextRequest) {
       let displayStatus: string;
       if (hasRecording) {
         displayStatus = "completed";
-      } else if (rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed") {
+      } else if (rawStatus === "busy" || rawStatus === "no_answer" || rawStatus === "noanswer" || rawStatus === "missed" || rawStatus === "voicemail") {
+        displayStatus = "missed";
+      } else if (rawStatus === "failed" || rawStatus === "cancelled" || rawStatus === "cancel" || rawStatus === "chanunavail" || rawStatus === "congestion") {
         displayStatus = "failed";
-      } else if (effectiveDurationSec === 0 && rawStatus !== "completed") {
+      } else if (effectiveDurationSec === 0 && rawStatus !== "completed" && rawStatus !== "missed") {
         displayStatus = "failed";
       } else {
         displayStatus = rawStatus;

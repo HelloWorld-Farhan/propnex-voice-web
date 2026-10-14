@@ -71,9 +71,9 @@ export async function POST(req: Request) {
     const callID = data.callID || data.callId || data.call_id || data.uuid || "";
     const Direction = data.Direction || data.direction || "";
     const StartTime = data.StartTime || data.start_time || data.startTime || "";
-    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || "";
-    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.did || "";
-    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || "";
+    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || data.from || "";
+    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.to || data.customerNumber || data.customer_number || "";
+    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || data.did || data.did_number || data.didNumber || "";
 
     // Parse numbers from callID if missing
     // Format: UUID.ext-DID-CALLER-DATE-TIME (e.g. 1788955197.876345-7946350796-8851860838-20260909-172958)
@@ -86,29 +86,47 @@ export async function POST(req: Request) {
     }
 
     // Determine direction
-    // Bonvoice: Direction = "Inbound" | "OutBound" | "Outbound" | "inbound"
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
-    // Only treat as inbound if Direction is EXPLICITLY inbound.
-    // If Direction is missing/empty, treat as OUTBOUND to avoid silently dropping
-    // external outbound calls (e.g. via Postman / third-party API) on outbound-only numbers.
     const isInbound = directionRaw === "inbound";
     const isDirectionExplicit = directionRaw !== "";
 
     // Clean up "None" strings that Bonvoice sends for missing fields
-    const cleanNum = (v: string) => (v && v.toLowerCase() !== "none" ? v : "");
-    const srcNum  = cleanNum(String(SourceNumber || "").trim());
-    const dstNum  = cleanNum(String(DestinationNumber || "").trim());
-    const dispNum = cleanNum(String(DisplayNumber || "").trim());
+    const cleanNum = (v: string) => {
+      if (!v) return "";
+      const s = String(v).trim();
+      return (s.toLowerCase() !== "none" && s.toLowerCase() !== "null" && s.toLowerCase() !== "undefined") ? s : "";
+    };
+
+    const srcNum  = cleanNum(String(SourceNumber || ""));
+    const dstNum  = cleanNum(String(DestinationNumber || ""));
+    const dispNum = cleanNum(String(DisplayNumber || ""));
 
     // Map fields per direction:
-    // INBOUND:  DID = DisplayNumber or DestinationNumber, Caller = SourceNumber
-    // OUTBOUND: DID = SourceNumber or DisplayNumber,      Caller = DestinationNumber
-    const didNumber   = isInbound
+    let didNumber   = isInbound
       ? String(dispNum || dstNum || "").trim()
       : String(dispNum || srcNum || "").trim();
-    const callerNumber = isInbound
+    let callerNumber = isInbound
       ? String(srcNum || "").trim()
       : String(dstNum || "").trim();
+
+    // Intelligent DID discovery for Postman/API/webhook calls:
+    const testVariants1 = phoneVariants(didNumber);
+    const hasMatch1 = await prisma.phoneNumber.findFirst({
+      where: { number: { in: testVariants1 } },
+      select: { id: true }
+    });
+    if (!hasMatch1 && callerNumber) {
+      const testVariants2 = phoneVariants(callerNumber);
+      const hasMatch2 = await prisma.phoneNumber.findFirst({
+        where: { number: { in: testVariants2 } },
+        select: { id: true }
+      });
+      if (hasMatch2) {
+        const temp = didNumber;
+        didNumber = callerNumber;
+        callerNumber = temp;
+      }
+    }
 
     const callDurationRaw = data.CallDuration || data.duration;
     let durationSeconds = 0;
@@ -122,7 +140,9 @@ export async function POST(req: Request) {
 
     // If a call is finished but has 0 duration, it should be marked as FAILED or MISSED
     if (!isCallLive && durationSeconds === 0) {
-      mappedStatus = "FAILED";
+      if (mappedStatus !== "MISSED") {
+        mappedStatus = "FAILED";
+      }
     }
 
     console.log(`Bonvoice Notification: dir=${isInbound ? "INBOUND" : "OUTBOUND"} status=${mappedStatus} DID=${didNumber} caller=${callerNumber} callID=${callID}`);

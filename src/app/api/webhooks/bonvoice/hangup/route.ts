@@ -41,9 +41,9 @@ export async function POST(req: Request) {
     const cost = data.cost || data.Cost || "";
     const ResourceURL = data.ResourceURL || data.resource_url || data.resourceUrl || "";
     
-    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || "";
-    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.did || "";
-    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || "";
+    let SourceNumber = data.SourceNumber || data.source_number || data.sourceNumber || data.caller || data.from || "";
+    let DestinationNumber = data.DestinationNumber || data.destination_number || data.destinationNumber || data.to || data.customerNumber || data.customer_number || "";
+    let DisplayNumber = data.DisplayNumber || data.display_number || data.displayNumber || data.did || data.did_number || data.didNumber || "";
     
     // Duration: Bonvoice sends CallDuration in seconds
     const actualDuration = data.CallDuration ?? data.callDuration ?? data.call_duration ?? data.duration ?? 0;
@@ -59,27 +59,47 @@ export async function POST(req: Request) {
 
     // Determine direction
     const directionRaw = Direction ? String(Direction).toLowerCase() : "";
-    // Only treat as inbound if Direction is EXPLICITLY "inbound".
-    // If Direction is missing/empty, treat as OUTBOUND so external outbound calls
-    // (via Postman / third-party API) on outbound-only numbers are not silently dropped.
     const isInbound = directionRaw === "inbound";
     const isDirectionExplicit = directionRaw !== "";
 
     // Clean up "None" strings that Bonvoice sends for missing fields
-    const cleanNum = (v: string) => (v && v.toLowerCase() !== "none" ? v : "");
-    const srcNum = cleanNum(String(SourceNumber || "").trim());
-    const dstNum = cleanNum(String(DestinationNumber || "").trim());
-    const dispNum = cleanNum(String(DisplayNumber || "").trim());
+    const cleanNum = (v: string) => {
+      if (!v) return "";
+      const s = String(v).trim();
+      return (s.toLowerCase() !== "none" && s.toLowerCase() !== "null" && s.toLowerCase() !== "undefined") ? s : "";
+    };
 
-    // Map DID and caller per direction:
-    // INBOUND:  DID = DisplayNumber or DestinationNumber, Caller = SourceNumber
-    // OUTBOUND: DID = SourceNumber or DisplayNumber,      Caller = DestinationNumber
-    const didNumber    = isInbound
+    let srcNum = cleanNum(String(SourceNumber || ""));
+    let dstNum = cleanNum(String(DestinationNumber || ""));
+    let dispNum = cleanNum(String(DisplayNumber || ""));
+
+    // Initial mapping
+    let didNumber    = isInbound
       ? String(dispNum || dstNum || "").trim()
       : String(dispNum || srcNum || "").trim();
-    const callerNumber = isInbound
+    let callerNumber = isInbound
       ? String(srcNum || "").trim()
       : String(dstNum || "").trim();
+
+    // Intelligent DID discovery for Postman/API/webhook calls:
+    // If didNumber doesn't match an assigned DID, but callerNumber does, swap them!
+    const testVariants1 = phoneVariants(didNumber);
+    const hasMatch1 = await prisma.phoneNumber.findFirst({
+      where: { number: { in: testVariants1 } },
+      select: { id: true }
+    });
+    if (!hasMatch1 && callerNumber) {
+      const testVariants2 = phoneVariants(callerNumber);
+      const hasMatch2 = await prisma.phoneNumber.findFirst({
+        where: { number: { in: testVariants2 } },
+        select: { id: true }
+      });
+      if (hasMatch2) {
+        const temp = didNumber;
+        didNumber = callerNumber;
+        callerNumber = temp;
+      }
+    }
 
     console.log(`Bonvoice Hangup: dir=${isInbound ? "INBOUND" : "OUTBOUND"} DID=${didNumber} caller=${callerNumber} callID=${callID}`);
 
@@ -119,14 +139,14 @@ export async function POST(req: Request) {
     let finalMappedStatus = "COMPLETED"; // default for hangup
     
     // Evaluate explicit statuses in hangup webhook
-    const statusRaw = (data.Status || data.status || "").toString().toUpperCase().trim();
+    const statusRaw = (data.Status || data.status || data.call_status || data.callStatus || "").toString().toUpperCase().trim();
     const agentStatusRaw = (data.AgentStatus || data.agent_status || "").toString().toUpperCase().trim();
     const effectiveStatus = (statusRaw === "NONE" || !statusRaw) && agentStatusRaw && agentStatusRaw !== "NONE" ? agentStatusRaw : statusRaw;
 
     if (isInbound) {
       if (recordingUrl && recordingUrl.trim().length > 0) {
         finalMappedStatus = "COMPLETED";
-      } else if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY") {
+      } else if (effectiveStatus === "NO ANSWER" || effectiveStatus === "NOANSWER" || effectiveStatus === "NO_ANSWER" || effectiveStatus === "BUSY" || effectiveStatus === "MISSED") {
         finalMappedStatus = "MISSED";
       } else if (effectiveStatus === "FAILED" || effectiveStatus === "CANCEL" || effectiveStatus === "CANCELLED" || effectiveStatus === "CHANUNAVAIL") {
         finalMappedStatus = "FAILED";
@@ -144,23 +164,32 @@ export async function POST(req: Request) {
       } else if (effectiveStatus === "ANSWERED" && durationSec > 0) {
         finalMappedStatus = "COMPLETED";
       } else if (
-        durationSec === 0 ||
         effectiveStatus === "NO ANSWER" ||
         effectiveStatus === "NOANSWER" ||
         effectiveStatus === "NO_ANSWER" ||
+        effectiveStatus === "MISSED" ||
         effectiveStatus === "BUSY" ||
+        effectiveStatus === "VOICEMAIL"
+      ) {
+        finalMappedStatus = "MISSED";
+      } else if (
         effectiveStatus === "CANCEL" ||
         effectiveStatus === "CANCELLED" ||
         effectiveStatus === "FAILED" ||
-        effectiveStatus === "CHANUNAVAIL"
+        effectiveStatus === "CHANUNAVAIL" ||
+        effectiveStatus === "CONGESTION"
       ) {
+        finalMappedStatus = "FAILED";
+      } else if (durationSec > 0) {
+        finalMappedStatus = "COMPLETED";
+      } else {
         finalMappedStatus = "FAILED";
       }
     }
 
-    // Credit calculation: 1.75 credits per 30s block for all calls
+    // Credit calculation: 1.75 credits per 30s block for all completed calls
     let creditsUsed = 0;
-    if (durationSec > 0) {
+    if (durationSec > 0 && finalMappedStatus === "COMPLETED") {
       const blocks = Math.ceil(durationSec / 30);
       creditsUsed = blocks * 1.75;
     } else if (finalMappedStatus === "COMPLETED" || (recordingUrl && recordingUrl.trim().length > 0)) {
