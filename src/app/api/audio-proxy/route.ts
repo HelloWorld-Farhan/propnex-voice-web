@@ -51,9 +51,77 @@ function detectAudioMimeType(buffer: Buffer, fallbackHeader: string | null): str
   return "audio/mpeg";
 }
 
+// Global in-flight fetch deduplication map
+const pendingFetches = new Map<string, Promise<CachedAudio>>();
+
+async function fetchAudioFromUpstream(fetchUrl: string): Promise<CachedAudio> {
+  const upstreamHeaders: Record<string, string> = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    Accept: "audio/*,video/*,*/*",
+  };
+
+  const bonvoiceToken = process.env.BONVOICE_TOKEN;
+  if (
+    bonvoiceToken &&
+    (fetchUrl.includes("bonvoice.com") || fetchUrl.includes("pbx.bonvoice") || fetchUrl.includes("backend.pbx"))
+  ) {
+    upstreamHeaders["Authorization"] = `Token ${bonvoiceToken}`;
+  }
+
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const upstream = await fetch(fetchUrl, {
+        headers: upstreamHeaders,
+        redirect: "follow",
+        signal: AbortSignal.timeout(25000),
+      });
+
+      if (!upstream.ok) {
+        throw new Error(`Upstream error: ${upstream.status}`);
+      }
+
+      const arrayBuffer = await upstream.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Incomplete PBX file stub check (telephony server writing header)
+      if (buffer.length <= 1000 && attempt === 1) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+
+      const rawContentType = upstream.headers.get("content-type") || "";
+      const isHtmlResponse =
+        rawContentType.toLowerCase().includes("text/html") ||
+        (buffer.length >= 5 &&
+          buffer[0] === 0x3c &&
+          (buffer[1] === 0x21 || buffer[1] === 0x68 || buffer[1] === 0x48));
+
+      if (isHtmlResponse) {
+        throw new Error("Upstream returned HTML instead of audio (auth failure?)");
+      }
+
+      const contentType = detectAudioMimeType(buffer, rawContentType);
+      return {
+        buffer,
+        contentType,
+        cachedAt: Date.now(),
+      };
+    } catch (err: any) {
+      lastError = err;
+      if (attempt === 1) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+  }
+
+  throw lastError || new Error("Failed to fetch audio from upstream");
+}
+
 /**
  * Audio Proxy — bypasses CORS and resolves upstream MIME/encoding mismatches.
  * Caches audio in memory so repeat seeks, multiple rows, or table refreshes are instant.
+ * Deduplicates in-flight requests so concurrent browser range requests share a single fetch.
  * Usage: /api/audio-proxy?url=<encoded_url>
  */
 export async function GET(req: NextRequest) {
@@ -77,85 +145,44 @@ export async function GET(req: NextRequest) {
   try {
     let audioData = forceRefresh ? undefined : globalAudioCache.get(fetchUrl);
 
-    // Evict incomplete stubs (e.g. empty WAV header when call just ended) or expired entries
+    // Evict incomplete stubs or expired entries
     if (!audioData || audioData.buffer.length <= 1000 || Date.now() - audioData.cachedAt > CACHE_TTL_MS) {
       if (audioData && audioData.buffer.length <= 1000) {
         globalAudioCache.delete(fetchUrl);
       }
 
-      // Build request headers — add Bonvoice auth token when the URL is from the Bonvoice server
-      const upstreamHeaders: Record<string, string> = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "audio/*,video/*,*/*",
-      };
-
-      // Inject Bonvoice auth token for recordings hosted on the PBX server
-      const bonvoiceToken = process.env.BONVOICE_TOKEN;
-      if (
-        bonvoiceToken &&
-        (fetchUrl.includes("bonvoice.com") || fetchUrl.includes("pbx.bonvoice") || fetchUrl.includes("backend.pbx"))
-      ) {
-        upstreamHeaders["Authorization"] = `Token ${bonvoiceToken}`;
+      // In-flight deduplication: coalesce multiple requests for the same URL onto one fetch
+      let fetchPromise = pendingFetches.get(fetchUrl);
+      if (!fetchPromise) {
+        fetchPromise = fetchAudioFromUpstream(fetchUrl)
+          .then((data) => {
+            if (data.buffer.length > 1000) {
+              if (globalAudioCache.size >= MAX_CACHE_ITEMS) {
+                const oldestKey = globalAudioCache.keys().next().value;
+                if (oldestKey) globalAudioCache.delete(oldestKey);
+              }
+              globalAudioCache.set(fetchUrl, data);
+            }
+            return data;
+          })
+          .finally(() => {
+            pendingFetches.delete(fetchUrl);
+          });
+        pendingFetches.set(fetchUrl, fetchPromise);
       }
 
-      const upstream = await fetch(fetchUrl, {
-        headers: upstreamHeaders,
-        redirect: "follow",
-        signal: AbortSignal.timeout(30000),
+      audioData = await fetchPromise;
+    }
+
+    if (!audioData || audioData.buffer.length <= 1000) {
+      return new NextResponse("Recording is still finalizing on telephony server", {
+        status: 503,
+        headers: {
+          "Retry-After": "2",
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Access-Control-Allow-Origin": "*",
+        },
       });
-
-      if (!upstream.ok) {
-        return new NextResponse(`Upstream error: ${upstream.status}`, { status: 502 });
-      }
-
-      const arrayBuffer = await upstream.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      // If the file is still being generated by the PBX (stub header only <= 1000 bytes), do NOT cache it!
-      if (buffer.length <= 1000) {
-        return new NextResponse("Recording is still finalizing on telephony server", {
-          status: 503,
-          headers: {
-            "Retry-After": "2",
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "Access-Control-Allow-Origin": "*",
-          },
-        });
-      }
-
-      const rawContentType = upstream.headers.get("content-type") || "";
-
-      // Detect if upstream returned an HTML error/login page instead of audio (e.g., auth failure)
-      const isHtmlResponse = rawContentType.toLowerCase().includes("text/html") ||
-        (buffer.length >= 5 && buffer[0] === 0x3c && (
-          // <!DOC or <html
-          (buffer[1] === 0x21 || buffer[1] === 0x68 || buffer[1] === 0x48)
-        ));
-      if (isHtmlResponse) {
-        console.error(`[AudioProxy] Upstream returned HTML instead of audio for: ${fetchUrl}`);
-        return new NextResponse("Upstream returned HTML instead of audio (auth failure?)", {
-          status: 502,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "no-store",
-          },
-        });
-      }
-
-      const contentType = detectAudioMimeType(buffer, rawContentType);
-
-      if (globalAudioCache.size >= MAX_CACHE_ITEMS) {
-        const oldestKey = globalAudioCache.keys().next().value;
-        if (oldestKey) globalAudioCache.delete(oldestKey);
-      }
-
-      audioData = {
-        buffer,
-        contentType,
-        cachedAt: Date.now(),
-      };
-
-      globalAudioCache.set(fetchUrl, audioData);
     }
 
     const { buffer, contentType } = audioData;

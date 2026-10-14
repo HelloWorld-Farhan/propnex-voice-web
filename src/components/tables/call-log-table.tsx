@@ -1,7 +1,7 @@
 "use client";
 
 import { FileText, Phone } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { RecordingPlayer } from "@/components/common/recording-player";
@@ -59,6 +59,7 @@ export function CallLogTable({
   isChangingPage = false,
 }: CallLogTableProps) {
   const [accurateDurations, setAccurateDurations] = useState<Record<string, number>>({});
+  const syncedCallsRef = useRef<Set<string>>(new Set());
 
   const handleDurationLoaded = (callId: string, realSec: number) => {
     setAccurateDurations((prev) => {
@@ -66,7 +67,10 @@ export function CallLogTable({
       return { ...prev, [callId]: realSec };
     });
 
-    // Quietly sync with server database
+    if (syncedCallsRef.current.has(callId)) return;
+    syncedCallsRef.current.add(callId);
+
+    // Quietly sync with server database once
     fetch("/api/calls/sync-duration", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

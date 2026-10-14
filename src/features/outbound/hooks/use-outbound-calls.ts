@@ -143,28 +143,56 @@ export function useOutboundCalls() {
     }
   }, [user?.companyId]);
 
+  const callsRef = useRef<CallRecord[]>(calls);
+  callsRef.current = calls;
+
   useEffect(() => {
     fetchCalls(false);
 
     const onForceStop = () => {
       fetchCalls(false);
     };
+
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        fetchCalls(true);
+      }
+    };
+
     if (typeof window !== "undefined") {
       window.addEventListener("propnex:campaign-force-stopped", onForceStop);
+      document.addEventListener("visibilitychange", onVisibilityChange);
     }
 
-    // Background polling every 2.5s for seamless real-time updates (pauses if tab is hidden)
-    const id = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-      fetchCalls(true);
-    }, 2500);
+    // Adaptive polling: 3s if calls are active/ringing, 20s when all calls are terminal
+    let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+    let isCancelled = false;
+
+    const scheduleNextPoll = () => {
+      if (isCancelled) return;
+      const hasLiveCalls = callsRef.current.some((c: any) => {
+        const s = (c.status || "").toLowerCase();
+        return s === "ringing" || s === "in-progress" || s === "answered";
+      });
+      const delayMs = hasLiveCalls ? 3000 : 20000;
+
+      pollTimeout = setTimeout(async () => {
+        if (isCancelled) return;
+        if (typeof document === "undefined" || document.visibilityState !== "hidden") {
+          await fetchCalls(true);
+        }
+        scheduleNextPoll();
+      }, delayMs);
+    };
+
+    scheduleNextPoll();
 
     return () => {
-      clearInterval(id);
+      isCancelled = true;
+      if (pollTimeout) clearTimeout(pollTimeout);
       if (typeof window !== "undefined") {
         window.removeEventListener("propnex:campaign-force-stopped", onForceStop);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
       }
     };
   }, [fetchCalls]);

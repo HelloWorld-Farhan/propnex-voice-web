@@ -46,6 +46,7 @@ export function RecordingPlayer({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPlayingRef = useRef(false);
   const playerId = useId();
 
   const clearStallTimer = () => {
@@ -59,6 +60,7 @@ export function RecordingPlayer({
     clearStallTimer();
     setIsBuffering(false);
     setIsPlaying(false);
+    isPlayingRef.current = false;
     setHasError(true);
     setErrorMsg(msg);
     console.warn("[RecordingPlayer] Error:", msg);
@@ -67,8 +69,20 @@ export function RecordingPlayer({
   const startStallTimer = () => {
     clearStallTimer();
     stallTimerRef.current = setTimeout(() => {
-      if (audioRef.current && audioRef.current.paused) {
-        triggerError("Timed out — recording may still be processing");
+      // If playback hasn't started after timeout
+      if (!isPlayingRef.current) {
+        console.warn("[RecordingPlayer] Stall timeout reached, auto-recovering...");
+        if (audioRef.current && cacheBuster === 0) {
+          setCacheBuster(Date.now());
+          setTimeout(() => {
+            if (audioRef.current && !isPlayingRef.current) {
+              audioRef.current.load();
+              audioRef.current.play().catch(() => {});
+            }
+          }, 150);
+        } else {
+          triggerError("Timed out — click retry to reload recording");
+        }
       }
     }, PLAY_STALL_TIMEOUT_MS);
   };
@@ -105,6 +119,7 @@ export function RecordingPlayer({
         }
         clearStallTimer();
         setIsPlaying(false);
+        isPlayingRef.current = false;
         setIsBuffering(false);
       }
     };
@@ -149,6 +164,7 @@ export function RecordingPlayer({
       clearStallTimer();
       audio.pause();
       setIsPlaying(false);
+      isPlayingRef.current = false;
       setIsBuffering(false);
     } else {
       // Pause all other audio elements on the document
@@ -169,12 +185,14 @@ export function RecordingPlayer({
         setProgress(0);
       }
 
-      setIsBuffering(true);
       setHasError(false);
       setErrorMsg("");
 
-      // Start stall timer — if audio doesn't play within timeout, show error
-      startStallTimer();
+      // If audio is ready to play, avoid showing buffering spinner
+      if (audio.readyState < 2) {
+        setIsBuffering(true);
+        startStallTimer();
+      }
 
       const playPromise = audio.play();
       if (playPromise !== undefined) {
@@ -182,10 +200,16 @@ export function RecordingPlayer({
           .then(() => {
             clearStallTimer();
             setIsPlaying(true);
+            isPlayingRef.current = true;
             setIsBuffering(false);
             setHasError(false);
           })
           .catch((err) => {
+            // Ignore normal AbortError (e.g. paused quickly or switched)
+            if (err?.name === "AbortError") {
+              setIsBuffering(false);
+              return;
+            }
             clearStallTimer();
             console.warn("audio.play() rejected:", err);
             const msg = err?.message || "";
@@ -213,10 +237,15 @@ export function RecordingPlayer({
             .then(() => {
               clearStallTimer();
               setIsPlaying(true);
+              isPlayingRef.current = true;
               setIsBuffering(false);
               setHasError(false);
             })
             .catch((err) => {
+              if (err?.name === "AbortError") {
+                setIsBuffering(false);
+                return;
+              }
               clearStallTimer();
               console.warn("Retry play rejected:", err);
               triggerError("Retry failed — recording unavailable");
@@ -236,29 +265,38 @@ export function RecordingPlayer({
         <audio
           ref={audioRef}
           src={proxyUrl}
-          preload="none"
+          preload="metadata"
           onPlay={() => {
             clearStallTimer();
             setIsPlaying(true);
+            isPlayingRef.current = true;
             setIsBuffering(false);
             setHasError(false);
           }}
           onPause={() => {
             clearStallTimer();
             setIsPlaying(false);
+            isPlayingRef.current = false;
             setIsBuffering(false);
           }}
           onPlaying={() => {
             clearStallTimer();
             setIsPlaying(true);
+            isPlayingRef.current = true;
             setIsBuffering(false);
             setHasError(false);
           }}
           onWaiting={() => {
-            setIsBuffering(true);
-            startStallTimer();
+            if (isPlayingRef.current) {
+              setIsBuffering(true);
+              startStallTimer();
+            }
           }}
           onCanPlay={() => {
+            setIsBuffering(false);
+            setHasError(false);
+          }}
+          onCanPlayThrough={() => {
             setIsBuffering(false);
             setHasError(false);
           }}
@@ -278,19 +316,27 @@ export function RecordingPlayer({
           onEnded={() => {
             clearStallTimer();
             setIsPlaying(false);
+            isPlayingRef.current = false;
             setIsBuffering(false);
             setProgress(0);
           }}
           onStalled={() => {
-            console.warn("[RecordingPlayer] Audio stalled");
-            startStallTimer();
+            if (isPlayingRef.current) {
+              console.warn("[RecordingPlayer] Audio stalled");
+              startStallTimer();
+            }
           }}
           onSuspend={() => {
-            if (isBuffering) startStallTimer();
+            if (isBuffering && isPlayingRef.current) startStallTimer();
           }}
           onError={(e) => {
             const audio = e.currentTarget;
             const code = audio.error?.code;
+            if (code === 1) {
+              // Aborted by user / page action
+              setIsBuffering(false);
+              return;
+            }
             const errMessages: Record<number, string> = {
               1: "Playback aborted",
               2: "Network error — check connection",
