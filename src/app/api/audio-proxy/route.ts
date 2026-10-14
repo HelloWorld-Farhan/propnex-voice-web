@@ -2,11 +2,59 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+type CachedAudio = {
+  buffer: Buffer;
+  contentType: string;
+  cachedAt: number;
+};
+
+// Global in-memory cache for audio buffers to avoid repeated PBX downloads
+const globalAudioCache = new Map<string, CachedAudio>();
+const MAX_CACHE_ITEMS = 150;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function detectAudioMimeType(buffer: Buffer, fallbackHeader: string | null): string {
+  if (buffer.length >= 12) {
+    // RIFF WAVE format: "RIFF" at 0..3 and "WAVE" at 8..11
+    if (
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x41 && buffer[10] === 0x56 && buffer[11] === 0x45
+    ) {
+      return "audio/wav";
+    }
+    // ID3 tag (MP3 container): "ID3" at 0..2
+    if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
+      return "audio/mpeg";
+    }
+    // Ogg container: "OggS" at 0..3
+    if (buffer[0] === 0x4f && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53) {
+      return "audio/ogg";
+    }
+    // MP4/M4A: "ftyp" at 4..7
+    if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+      return "audio/mp4";
+    }
+    // Raw MP3 frame header (0xFF followed by 0xE0 or higher bits)
+    if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) {
+      return "audio/mpeg";
+    }
+  }
+
+  if (fallbackHeader) {
+    const lower = fallbackHeader.toLowerCase();
+    if (lower.includes("wav")) return "audio/wav";
+    if (lower.includes("ogg")) return "audio/ogg";
+    if (lower.includes("mp4") || lower.includes("m4a")) return "audio/mp4";
+    if (lower.includes("mpeg") || lower.includes("mp3")) return "audio/mpeg";
+  }
+
+  return "audio/mpeg";
+}
+
 /**
- * Audio Proxy — bypasses CORS for Google Drive audio files.
- * Browser cannot load drive.google.com in <audio> tags directly.
- * This proxy fetches on the server (no CORS) and streams back to client.
- * Usage: /api/audio-proxy?url=<encoded_drive_url>
+ * Audio Proxy — bypasses CORS and resolves upstream MIME/encoding mismatches.
+ * Caches audio in memory so repeat seeks, multiple rows, or table refreshes are instant.
+ * Usage: /api/audio-proxy?url=<encoded_url>
  */
 export async function GET(req: NextRequest) {
   const rawUrl = req.nextUrl.searchParams.get("url");
@@ -25,66 +73,81 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const upstream = await fetch(fetchUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "audio/*,video/*,*/*",
-      },
-      redirect: "follow",
-    });
+    let audioData = globalAudioCache.get(fetchUrl);
 
-    if (!upstream.ok) {
-      return new NextResponse(`Upstream error: ${upstream.status}`, { status: 502 });
+    if (!audioData || Date.now() - audioData.cachedAt > CACHE_TTL_MS) {
+      const upstream = await fetch(fetchUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+          Accept: "audio/*,video/*,*/*",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!upstream.ok) {
+        return new NextResponse(`Upstream error: ${upstream.status}`, { status: 502 });
+      }
+
+      const arrayBuffer = await upstream.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const rawContentType = upstream.headers.get("content-type");
+      const contentType = detectAudioMimeType(buffer, rawContentType);
+
+      if (globalAudioCache.size >= MAX_CACHE_ITEMS) {
+        const oldestKey = globalAudioCache.keys().next().value;
+        if (oldestKey) globalAudioCache.delete(oldestKey);
+      }
+
+      audioData = {
+        buffer,
+        contentType,
+        cachedAt: Date.now(),
+      };
+
+      globalAudioCache.set(fetchUrl, audioData);
     }
 
-    const arrayBuffer = await upstream.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const { buffer, contentType } = audioData;
     const totalLength = buffer.length;
-    let contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
-    // Safari and HTML5 audio strictly expect audio/mpeg for MP3 files
-    if (
-      contentType.includes("application/octet-stream") ||
-      contentType.includes("text/html") ||
-      contentType.includes("application/json") ||
-      contentType.includes("audio/mp3")
-    ) {
-      contentType = "audio/mpeg";
-    }
-
     const rangeHeader = req.headers.get("range");
 
     if (rangeHeader) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1;
-      const chunksize = end - start + 1;
-      const chunk = buffer.subarray(start, end + 1);
 
-      return new NextResponse(chunk, {
-        status: 206,
-        headers: {
-          "Content-Range": `bytes ${start}-${end}/${totalLength}`,
-          "Accept-Ranges": "bytes",
-          "Content-Length": chunksize.toString(),
-          "Content-Type": contentType,
-          "Cache-Control": "public, max-age=3600",
-          "Access-Control-Allow-Origin": "*",
-        },
-      });
+      if (!isNaN(start) && start < totalLength) {
+        const validEnd = isNaN(end) ? totalLength - 1 : Math.min(end, totalLength - 1);
+        const chunksize = validEnd - start + 1;
+        const chunk = buffer.subarray(start, validEnd + 1);
+
+        return new NextResponse(new Uint8Array(chunk), {
+          status: 206,
+          headers: {
+            "Content-Range": `bytes ${start}-${validEnd}/${totalLength}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": chunksize.toString(),
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=86400, immutable",
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      }
     }
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Accept-Ranges": "bytes",
         "Content-Length": totalLength.toString(),
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "public, max-age=86400, immutable",
         "Access-Control-Allow-Origin": "*",
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("Audio proxy error:", err);
-    return new NextResponse("Failed to fetch audio", { status: 502 });
+    return new NextResponse(err?.message || "Failed to fetch audio", { status: 502 });
   }
 }

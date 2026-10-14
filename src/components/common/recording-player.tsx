@@ -22,6 +22,13 @@ type RecordingPlayerProps = {
   onDurationChange?: (actualDurationSec: number) => void;
 };
 
+declare global {
+  interface Window {
+    __propnexActiveAudio?: HTMLAudioElement | null;
+    __propnexActivePlayerId?: string | null;
+  }
+}
+
 export function RecordingPlayer({
   durationSeconds,
   audioUrl,
@@ -37,7 +44,10 @@ export function RecordingPlayer({
   const [hasError, setHasError] = useState(false);
   const [copied, setCopied] = useState(false);
   const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
+  
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playerId = useRef<string>(Math.random().toString(36).substring(2));
+  const retryCountRef = useRef<number>(0);
 
   const handleCopyUrl = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -70,13 +80,16 @@ export function RecordingPlayer({
     }
   }, [durationSeconds]);
 
-  // Global listener: pause this player when another starts playing
+  // Global listener: pause this player immediately whenever any other player starts
   useEffect(() => {
     const handleGlobalPlay = (e: Event) => {
       const customEvent = e as CustomEvent;
-      if (customEvent.detail !== audioUrl && isPlaying) {
+      const activeId = customEvent.detail?.playerId;
+      if (activeId && activeId !== playerId.current) {
         if (audioRef.current) {
-          audioRef.current.pause();
+          try {
+            audioRef.current.pause();
+          } catch {}
         }
         setIsPlaying(false);
         setIsBuffering(false);
@@ -84,14 +97,20 @@ export function RecordingPlayer({
     };
     window.addEventListener("recording-play", handleGlobalPlay);
     return () => window.removeEventListener("recording-play", handleGlobalPlay);
-  }, [audioUrl, isPlaying]);
+  }, []);
 
   // Clean up audio on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
+        try {
+          audioRef.current.pause();
+          audioRef.current.src = "";
+        } catch {}
+        if (window.__propnexActivePlayerId === playerId.current) {
+          window.__propnexActiveAudio = null;
+          window.__propnexActivePlayerId = null;
+        }
         audioRef.current = null;
       }
     };
@@ -129,11 +148,14 @@ export function RecordingPlayer({
     audio.addEventListener("canplay", () => {
       syncDuration();
       setIsBuffering(false);
+      setHasError(false);
+      retryCountRef.current = 0;
     });
 
     audio.addEventListener("playing", () => {
       setIsBuffering(false);
       setIsPlaying(true);
+      setHasError(false);
     });
 
     audio.addEventListener("pause", () => {
@@ -146,9 +168,25 @@ export function RecordingPlayer({
       setIsBuffering(false);
       setProgress(0);
       audio.currentTime = 0;
+      if (window.__propnexActivePlayerId === playerId.current) {
+        window.__propnexActiveAudio = null;
+        window.__propnexActivePlayerId = null;
+      }
     });
 
     audio.addEventListener("error", () => {
+      if (retryCountRef.current < 3) {
+        retryCountRef.current += 1;
+        const delay = retryCountRef.current * 700;
+        setTimeout(() => {
+          if (audioRef.current) {
+            try {
+              audioRef.current.load();
+            } catch {}
+          }
+        }, delay);
+        return;
+      }
       setIsBuffering(false);
       setIsPlaying(false);
       setHasError(true);
@@ -179,21 +217,48 @@ export function RecordingPlayer({
       audio.pause();
       setIsPlaying(false);
       setIsBuffering(false);
+      if (window.__propnexActivePlayerId === playerId.current) {
+        window.__propnexActiveAudio = null;
+        window.__propnexActivePlayerId = null;
+      }
     } else {
+      // Immediately stop any other audio that is currently playing across the app
+      if (window.__propnexActiveAudio && window.__propnexActiveAudio !== audio) {
+        try {
+          window.__propnexActiveAudio.pause();
+        } catch {}
+      }
+      window.__propnexActiveAudio = audio;
+      window.__propnexActivePlayerId = playerId.current;
+
+      // Broadcast to all other player instances to reset their playing state
+      window.dispatchEvent(
+        new CustomEvent("recording-play", { detail: { playerId: playerId.current } })
+      );
+
       if (currentDuration > 0 && progress >= currentDuration) {
         audio.currentTime = 0;
         setProgress(0);
       }
       setIsBuffering(true);
+      setHasError(false);
+
       audio.play().then(() => {
         setIsPlaying(true);
         setIsBuffering(false);
-        window.dispatchEvent(new CustomEvent("recording-play", { detail: audioUrl }));
       }).catch((err) => {
         setIsBuffering(false);
         if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
           console.error("Audio playback error:", err);
-          setHasError(true);
+          if (retryCountRef.current < 3) {
+            retryCountRef.current += 1;
+            setTimeout(() => {
+              audio.load();
+              audio.play().catch(() => {});
+            }, 800);
+          } else {
+            setHasError(true);
+          }
         }
       });
     }
@@ -202,8 +267,11 @@ export function RecordingPlayer({
   const handleRetry = () => {
     setHasError(false);
     setIsBuffering(false);
+    retryCountRef.current = 0;
     if (audioRef.current) {
-      audioRef.current.src = "";
+      try {
+        audioRef.current.src = "";
+      } catch {}
       audioRef.current = null;
     }
     const audio = getOrCreateAudio();
