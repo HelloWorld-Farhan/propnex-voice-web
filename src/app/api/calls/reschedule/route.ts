@@ -31,6 +31,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validate scheduledAt
+    const scheduledTime = new Date(scheduledAt).getTime();
+    if (isNaN(scheduledTime) || scheduledTime <= Date.now()) {
+      return NextResponse.json(
+        { error: "Scheduled time must be in the future." },
+        { status: 400 }
+      );
+    }
+
+    // Midnight cutoff check: Failed leads expire at 12:00 AM midnight when a new day begins
+    const istFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+    const todayIst = istFmt.format(new Date());
+    const schedIst = istFmt.format(new Date(scheduledTime));
+    if (schedIst < todayIst) {
+      return NextResponse.json(
+        { error: "Cannot schedule calls for a past day. Failed leads expire at 12:00 AM midnight as a new day starts." },
+        { status: 400 }
+      );
+    }
+
     // Verify credit balance: reject if 0 credits remaining
     try {
       const jwt = require("jsonwebtoken");

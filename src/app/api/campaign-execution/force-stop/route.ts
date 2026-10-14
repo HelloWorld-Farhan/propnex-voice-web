@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import jwt from "jsonwebtoken";
+import { clearDashboardCache } from "@/app/api/reactivation/dashboard/route";
 
 const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 
@@ -72,6 +73,13 @@ export async function POST(req: NextRequest) {
       modifiedCallsCount = updateResult.count;
     } catch (dbErr) {
       console.error("[ForceStop Route] Database update error:", dbErr);
+    }
+
+    // Invalidate dashboard cache immediately
+    try {
+      clearDashboardCache(finalCompanyId);
+    } catch (cErr) {
+      console.error("[ForceStop Route] Cache clear error:", cErr);
     }
 
     // 2. Notify propnexai-main-server on port 3002 or via public api

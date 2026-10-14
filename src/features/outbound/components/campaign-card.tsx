@@ -401,6 +401,70 @@ export function CampaignCard({
     return null;
   }, [isReactivationCard, historicalCampaigns]);
 
+  const [isStoppingWave, setIsStoppingWave] = useState(false);
+
+  const handleStopReactivationWave = async () => {
+    if (isStoppingWave) return;
+    setIsStoppingWave(true);
+    try {
+      const pnxToken = typeof window !== "undefined" ? (localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "") : "";
+      const storedUserStr = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      const user = storedUserStr ? JSON.parse(storedUserStr) : {};
+      const targetCompanyId = companyId || user.companyId || (user.companies && user.companies[0]?.id) || null;
+
+      // 1. Trigger force-stop on web API
+      await fetch("/api/campaign-execution/force-stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${pnxToken}`
+        },
+        body: JSON.stringify({ companyId: targetCompanyId || undefined })
+      });
+
+      // 2. Also trigger on public API if available
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
+      if (apiBase !== "/api" && apiBase !== "") {
+        fetch(`${apiBase}/api/campaign-execution/force-stop`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${pnxToken}`
+          },
+          body: JSON.stringify({ companyId: targetCompanyId || undefined })
+        }).catch(() => {});
+      }
+
+      // 3. Immediately re-fetch dashboard data
+      const dashRes = await fetch(`/api/reactivation/dashboard?t=${Date.now()}`, {
+        headers: { Authorization: `Bearer ${pnxToken}` },
+        cache: "no-store"
+      });
+      if (dashRes.ok) {
+        const dashData = await dashRes.json();
+        if (dashData.data) {
+          setHistoricalCampaigns(dashData.data);
+          try {
+            localStorage.setItem("cached_reactivation_campaigns", JSON.stringify(dashData.data));
+          } catch (e) {}
+        }
+      }
+
+      // 4. Trigger alert or banner
+      window.dispatchEvent(new CustomEvent('triggerReactivationAnimation', {
+        detail: {
+          title: "Wave Force Stopped",
+          subtitle: "Currently running wave has been terminated.",
+          type: "force_stopped"
+        }
+      }));
+    } catch (err) {
+      console.error("Failed to stop reactivation wave:", err);
+    } finally {
+      setIsStoppingWave(false);
+    }
+  };
+
   const pendingLeads = (campaign.leads || []).map((l: any, i: number) => ({ ...l, originalIdx: i })).filter((l: any) => !l.called);
   const successLeads = (campaign.leads || []).map((l: any, i: number) => ({ ...l, originalIdx: i })).filter((l: any) => l.called && !l.isFailed);
   const failedLeads = (campaign.leads || []).map((l: any, i: number) => ({ ...l, originalIdx: i })).filter((l: any) => l.called && l.isFailed);
@@ -644,7 +708,7 @@ export function CampaignCard({
               </Badge>
             )}
             {isReactivationCard && runningWaveInfo ? (
-               <div className="flex gap-2 ml-2">
+               <div className="flex items-center gap-2 ml-2">
                  <Badge 
                     variant="outline" 
                     className="text-xs font-semibold px-2.5 py-0.5 bg-blue-500/15 text-blue-500 border-blue-500/30 animate-pulse flex items-center gap-1.5"
@@ -655,6 +719,20 @@ export function CampaignCard({
                    </span>
                    Running {runningWaveInfo.stage} - {runningWaveInfo.processed} / {runningWaveInfo.total}
                  </Badge>
+                 <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 text-xs font-medium text-destructive border-destructive/30 hover:bg-destructive/10 gap-1 rounded-md"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStopReactivationWave();
+                    }}
+                    disabled={isStoppingWave}
+                    title={`Stop ${runningWaveInfo.stage} wave immediately`}
+                 >
+                   <StopCircle className="size-3" />
+                   {isStoppingWave ? "Stopping..." : "Stop Wave"}
+                 </Button>
                </div>
             ) : isReactivationCard && campaign.qStage && campaign.qStatus ? (
                <div className="flex gap-2 ml-2">
@@ -1107,6 +1185,17 @@ export function CampaignCard({
 
           {isReactivationCard && (
             <div className="flex gap-2">
+              {runningWaveInfo && (
+                <Button
+                  variant="outline"
+                  className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10 h-9 text-sm font-medium"
+                  onClick={handleStopReactivationWave}
+                  disabled={isStoppingWave}
+                >
+                  <StopCircle className="size-4" />
+                  {isStoppingWave ? "Stopping Wave..." : `Stop ${runningWaveInfo.stage}`}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 className="border-primary/50 text-primary hover:bg-primary/10 gap-2 h-9 text-sm"
@@ -1262,9 +1351,24 @@ export function CampaignCard({
 
               {/* Right Panel: Q1, Q2, Q3 Tracking */}
               <div id="reactivation-details" className="flex-1 bg-background/50 flex flex-col min-w-0 overflow-visible md:overflow-hidden">
-                <div className="p-4 border-b border-border/50 shrink-0 flex items-center justify-between">
-                  <div className="text-xs font-semibold text-muted-foreground tracking-wider uppercase">
-                    Reactivation Lifecycle (3 Waves)
+                <div className="p-4 border-b border-border/50 shrink-0 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs font-semibold text-muted-foreground tracking-wider uppercase">
+                      Reactivation Lifecycle (3 Waves)
+                    </div>
+                    {runningWaveInfo && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2.5 text-xs gap-1.5 font-semibold text-white bg-red-600 hover:bg-red-700 border-red-600 shadow-sm"
+                        onClick={handleStopReactivationWave}
+                        disabled={isStoppingWave}
+                        title={`Stop currently running ${runningWaveInfo.stage} wave immediately`}
+                      >
+                        <StopCircle className="size-3.5" />
+                        {isStoppingWave ? "Stopping..." : `Stop ${runningWaveInfo.stage} Wave`}
+                      </Button>
+                    )}
                   </div>
                   <div className="relative">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -1352,19 +1456,37 @@ export function CampaignCard({
                                   <span className="font-bold text-foreground">{wave.label} ({wave.stage})</span>
                                   <span className="text-xs text-muted-foreground">{wave.data.scheduled}</span>
                                 </div>
-                                <Badge 
-                                  variant="outline"
-                                  className={cn(
-                                    "px-2.5 py-1 text-xs font-medium border",
-                                    wave.data.status === "Running" && "bg-blue-500/15 text-blue-500 border-blue-500/30 animate-pulse",
-                                    wave.data.status === "Completed" && "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
-                                    wave.data.status === "Pending" && "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                                <div className="flex items-center gap-1.5">
+                                  <Badge 
+                                    variant="outline"
+                                    className={cn(
+                                      "px-2.5 py-1 text-xs font-medium border",
+                                      wave.data.status === "Running" && "bg-blue-500/15 text-blue-500 border-blue-500/30 animate-pulse",
+                                      wave.data.status === "Completed" && "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
+                                      wave.data.status === "Pending" && "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                                    )}
+                                  >
+                                    {wave.data.status === "Running" 
+                                      ? `Running - ${processedCount} / ${totalCount}` 
+                                      : wave.data.status}
+                                  </Badge>
+                                  {wave.data.status === "Running" && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 px-2 text-xs font-semibold gap-1 text-white bg-red-600 hover:bg-red-700 border-red-600 shadow-sm"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleStopReactivationWave();
+                                      }}
+                                      disabled={isStoppingWave}
+                                      title={`Stop ${wave.stage} immediately`}
+                                    >
+                                      <StopCircle className="size-3" />
+                                      {isStoppingWave ? "..." : "Stop"}
+                                    </Button>
                                   )}
-                                >
-                                  {wave.data.status === "Running" 
-                                    ? `Running - ${processedCount} / ${totalCount}` 
-                                    : wave.data.status}
-                                </Badge>
+                                </div>
                               </div>
                               {(() => {
                                 const isPendingWave = wave.data.status === "Pending" || wave.data.status === "Scheduled";
