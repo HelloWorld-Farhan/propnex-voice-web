@@ -42,6 +42,7 @@ export function SidebarNav({ onNavigate, className, isLockedOut }: SidebarNavPro
           <Link
             key={item.href}
             href={isDisabled ? "#" : item.href}
+            prefetch={!isDisabled}
             onClick={(e) => {
               if (isDisabled) {
                 e.preventDefault();
@@ -50,29 +51,29 @@ export function SidebarNav({ onNavigate, className, isLockedOut }: SidebarNavPro
               onNavigate?.();
             }}
             className={cn(
-              "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all overflow-hidden",
+              "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors overflow-hidden",
               isActive && !isComingSoon
-                ? "sidebar-active-indicator bg-accent text-foreground"
+                ? "sidebar-active-indicator text-foreground font-semibold"
                 : isDisabled
                 ? "text-muted-foreground/30 cursor-not-allowed"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
             )}
           >
             {isActive && !isComingSoon && (
               <motion.div
                 layoutId="sidebar-active"
                 className="absolute inset-0 rounded-xl bg-accent"
-                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                transition={{ type: "spring", stiffness: 350, damping: 30 }}
               />
             )}
             <span
               className={cn(
-                "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg transition-all",
+                "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg transition-transform duration-200",
                 isActive && !isComingSoon
-                  ? "bg-foreground text-background"
+                  ? "bg-foreground text-background scale-105 shadow-sm"
                   : isDisabled
                   ? "bg-muted/30 text-muted-foreground/30"
-                  : "bg-muted text-muted-foreground group-hover:bg-accent group-hover:text-foreground"
+                  : "bg-muted text-muted-foreground group-hover:bg-accent group-hover:text-foreground group-hover:scale-105"
               )}
             >
               <Icon className="size-4" />
