@@ -6,9 +6,12 @@ const JWT_SECRET = process.env.JWT_SECRET || "propnex_secret_jwt_key_2026_key";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// High-performance in-memory cache with 1.5-second TTL for instant realtime accuracy
+// High-performance in-memory cache with adaptive TTL:
+// - 0 ms (disabled) when any wave is Running, to ensure Running X/Y counter is always live
+// - 3000 ms otherwise to reduce DB load
 const dashboardCache = new Map<string, { data: any; expiry: number }>();
-const CACHE_TTL_MS = 1500;
+const CACHE_TTL_MS_ACTIVE = 0;    // disabled during Running
+const CACHE_TTL_MS_IDLE   = 3000; // 3 s when idle/completed
 
 export async function GET(req: NextRequest) {
   try {
@@ -31,7 +34,7 @@ export async function GET(req: NextRequest) {
 
     const companyId = member.companyId;
 
-    // Check memory cache for instant sub-millisecond response
+    // Serve from in-memory cache only when NOT actively running a wave
     const cached = dashboardCache.get(companyId);
     const nowMs = Date.now();
     if (cached && cached.expiry > nowMs) {
@@ -631,11 +634,18 @@ export async function GET(req: NextRequest) {
       delete b.originalDateMs;
     }
 
-    // Cache in memory for 10 seconds
-    dashboardCache.set(companyId, {
-      data,
-      expiry: Date.now() + CACHE_TTL_MS
-    });
+    // Adaptive cache TTL: disabled (0 ms) when any wave is actively running,
+    // so the Running X / Y counter is always live; 3 s otherwise.
+    const anyRunning = data.some(
+      (b: any) => b.q1?.status === "Running" || b.q2?.status === "Running" || b.q3?.status === "Running"
+    );
+    const cacheTtl = anyRunning ? CACHE_TTL_MS_ACTIVE : CACHE_TTL_MS_IDLE;
+    if (cacheTtl > 0) {
+      dashboardCache.set(companyId, { data, expiry: Date.now() + cacheTtl });
+    } else {
+      // Delete any stale cache entry so the next request always hits the DB
+      dashboardCache.delete(companyId);
+    }
 
     return NextResponse.json({ data });
   } catch (error) {

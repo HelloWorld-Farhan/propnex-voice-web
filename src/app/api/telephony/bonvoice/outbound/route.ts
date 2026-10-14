@@ -42,17 +42,24 @@ export async function POST(req: Request) {
     const template_url = process.env.BONVOICE_VOICEBOT_URL || "wss://vineeth-inbound.onrender.com/ws/voice-agent";
 
     // Create a pending call log record in our DB
+    const callLogPublicId = `CL${Date.now()}-${phoneNumber.id.substring(0, 5)}`;
     const callLog = await prisma.callLog.create({
       data: {
-        resourceKey: `CL${Date.now()}`,
-        publicId: `public-CL${Date.now()}`,
-        direction: "OUTBOUND",
-        status: "PENDING",
-        companyId: lead.companyId,
-        leadId: lead.id,
+        callLogId:     callLogPublicId,
+        publicId:      callLogPublicId,
+        providerCallId: `pending-${callLogPublicId}`, // placeholder so webhook can find it
+        direction:     "OUTBOUND",
+        status:        "PENDING",
+        startedAt:     new Date(),
+        companyId:     lead.companyId,
+        leadId:        lead.id,
         phoneNumberId: phoneNumber.id,
-        agentId: agentId,
-      } as any, // Typecast since some generated types might vary slightly
+        aiAgentId:     agentId,
+        historicalDidString: phoneNumber.number,
+        historicalChannels:  phoneNumber.channels || 1,
+        durationSeconds: 0,
+        provider: "BONVOICE",
+      } as any,
     });
 
     const bonvoiceRes = await fetch(`${baseUrl}/click2call/`, { // Adjust to match exact Bonvoice endpoint for voicebots

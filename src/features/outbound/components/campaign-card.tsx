@@ -339,12 +339,17 @@ export function CampaignCard({
       // Fetch dashboard without triggering loading state UI changes
       fetchDashboard();
 
-      // Realtime polling: 2s when modal is open or any wave is running, 10s otherwise
-      const pollMs = leadsModalOpen ? 2000 : 10000;
+      // Realtime polling:
+      // - 2500ms when any wave is Running OR modal is open (real-time counters)
+      // - 10000ms when all waves are idle/pending/completed
+      const anyRunning = historicalCampaigns.some(
+        (h: any) => h.q1?.status === "Running" || h.q2?.status === "Running" || h.q3?.status === "Running"
+      );
+      const pollMs = (leadsModalOpen || anyRunning) ? 2500 : 10000;
       const interval = setInterval(fetchDashboard, pollMs);
       return () => clearInterval(interval);
     }
-  }, [isReactivationCard, leadsModalOpen]);
+  }, [isReactivationCard, leadsModalOpen, historicalCampaigns]);
 
   const todayStr = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date()).replace("Sept", "Sep");
   const todayBucket = historicalCampaigns.find(h => h.date === todayStr || h.date === todayStr.replace("Sep", "Sept"));
@@ -1254,14 +1259,15 @@ export function CampaignCard({
                           });
 
                           // STRICT USER REQUIREMENT SORTING:
-                          // 1st: Success (Completed) leads
-                          // 2nd: Failed leads
-                          // 3rd: Pending leads
+                          // 1st: Ringing/live leads (handled above as ringingLeads, pinned at very top)
+                          // 2nd: Success (Completed) leads
+                          // 3rd: Failed leads
+                          // 4th: Pending leads
                           const getLeadScore = (lead: any, waveStatus: string) => {
-                            if (lead.isCompleted) return 3;
+                            if (lead.isCompleted) return 3;  // 2nd
                             const isFailed = lead.isFailed || (waveStatus === "Completed" && !lead.isCompleted);
-                            if (isFailed) return 2;
-                            return 1;
+                            if (isFailed) return 2;          // 3rd
+                            return 1;                        // 4th Pending
                           };
 
                           const sortedLeads = [...filteredLeads].sort((a: any, b: any) => getLeadScore(b, wave.data.status) - getLeadScore(a, wave.data.status));
@@ -1354,7 +1360,8 @@ export function CampaignCard({
                                       <span className="text-red-500">Failed</span>
                                       <span className="bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full font-bold">{failed}</span>
                                     </span>
-                                    {pending > 0 && (
+                                    {/* Hide Pending pill when wave is Running — only show Success/Failed realtime */}
+                                    {wave.data.status !== "Running" && pending > 0 && (
                                       <span className="flex items-center gap-1">
                                         <span className="text-amber-500">Pending</span>
                                         <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
