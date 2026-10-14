@@ -116,13 +116,17 @@ export function RecordingPlayer({
     };
   }, []);
 
-  const getOrCreateAudio = useCallback(() => {
-    if (audioRef.current) return audioRef.current;
+  const getOrCreateAudio = useCallback((forceRefresh = false) => {
+    if (audioRef.current && !forceRefresh) return audioRef.current;
     if (!audioUrl) return null;
 
-    const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio-proxy")
+    let proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio-proxy")
       ? `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}`
       : audioUrl;
+
+    if (forceRefresh && proxyUrl.includes("/api/audio-proxy")) {
+      proxyUrl += `&t=${Date.now()}`;
+    }
 
     const audio = new Audio(proxyUrl);
     audio.preload = "metadata";
@@ -179,8 +183,9 @@ export function RecordingPlayer({
         retryCountRef.current += 1;
         const delay = retryCountRef.current * 700;
         setTimeout(() => {
-          if (audioRef.current) {
+          if (audioRef.current && audioUrl) {
             try {
+              audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
               audioRef.current.load();
             } catch {}
           }
@@ -253,8 +258,11 @@ export function RecordingPlayer({
           if (retryCountRef.current < 3) {
             retryCountRef.current += 1;
             setTimeout(() => {
-              audio.load();
-              audio.play().catch(() => {});
+              if (audioUrl) {
+                audio.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
+                audio.load();
+                audio.play().catch(() => {});
+              }
             }, 800);
           } else {
             setHasError(true);
@@ -270,11 +278,12 @@ export function RecordingPlayer({
     retryCountRef.current = 0;
     if (audioRef.current) {
       try {
+        audioRef.current.pause();
         audioRef.current.src = "";
       } catch {}
       audioRef.current = null;
     }
-    const audio = getOrCreateAudio();
+    const audio = getOrCreateAudio(true);
     if (audio) {
       audio.load();
     }
