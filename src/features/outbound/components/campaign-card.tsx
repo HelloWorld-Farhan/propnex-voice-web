@@ -1328,6 +1328,12 @@ export function CampaignCard({
                                       <span className="text-red-500">Failed</span>
                                       <span className="bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full font-bold">{failed}</span>
                                     </span>
+                                    {pending > 0 && (
+                                      <span className="flex items-center gap-1">
+                                        <span className="text-amber-500">Pending</span>
+                                        <span className="bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded-full font-bold">{pending}</span>
+                                      </span>
+                                    )}
                                   </div>
                                 );
                               })()}
