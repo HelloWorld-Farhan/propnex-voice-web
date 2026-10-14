@@ -62,6 +62,14 @@ export async function GET(req: NextRequest) {
       companyIdsToQuery = [member.companyId, ...subCompanies.map((c: any) => c.id)];
     }
 
+    // Query all phone numbers associated with the requested companies to catch internal calls linked by DID
+    const companyPhoneNumbers = await prisma.phoneNumber.findMany({
+      where: { companyId: { in: companyIdsToQuery } },
+      select: { id: true, number: true },
+    });
+    const companyPhoneIds = companyPhoneNumbers.map((p: any) => p.id);
+    const companyNumberCores = companyPhoneNumbers.map((p: any) => getCoreNumber(p.number)).filter(Boolean);
+
     const page = parseInt(searchParams.get("page") || "1", 10);
     const limit = parseInt(searchParams.get("limit") || "10", 10);
     const skip = (page - 1) * limit;
@@ -79,8 +87,12 @@ export async function GET(req: NextRequest) {
 
     const getWhereClause = () => {
       const whereClause: any = {
-        companyId: { in: companyIdsToQuery },
         direction: "OUTBOUND",
+        OR: [
+          { companyId: { in: companyIdsToQuery } },
+          ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
+          ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
+        ],
       };
 
       if (statusParam && statusParam.toLowerCase() !== "all") {
@@ -202,8 +214,12 @@ export async function GET(req: NextRequest) {
     // Live calls pinned at top — exclude live reactivation ones (they live in the reactivation dashboard).
     const shouldIncludeLive = !statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
     const liveOutboundWhere: any = {
-      companyId: { in: companyIdsToQuery },
       direction: "OUTBOUND",
+      OR: [
+        { companyId: { in: companyIdsToQuery } },
+        ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
+        ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
+      ],
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
       NOT: { correlationId: { startsWith: "reactivation-" } },
     };
@@ -248,100 +264,98 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const mappedCalls = mergedCalls.map(call => {
-      const minutes = Math.floor((call.durationSeconds || 0) / 60);
-      const seconds = (call.durationSeconds || 0) % 60;
+    const cleanPhone = (val: any) => {
+      if (!val) return "";
+      const s = String(val).trim();
+      if (s.toLowerCase() === "none" || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return "";
+      return s;
+    };
 
-      
-      // Aggressively extract assigned/DID number from all available JSON fields
+    const mappedCalls = mergedCalls.map(call => {
+      // Aggressively extract assigned/DID number and customer number from all available JSON fields
       let fallbackAssignedNumber = "";
       let fallbackCustomerNumber = "";
       
-      // 1. Try providerWebhook (Bonvoice: DisplayNumber = DID assigned number)
+      // 1. Try providerWebhook (Bonvoice: DisplayNumber = DID assigned number, DestinationNumber = customer)
       if (call.providerWebhook && typeof call.providerWebhook === 'object') {
          const wh: any = call.providerWebhook;
-         // Bonvoice OUTBOUND: DisplayNumber or SourceNumber = DID (assigned number), DestinationNumber = customer
          fallbackAssignedNumber =
-           wh.DisplayNumber || wh.display_number || wh.displayNumber ||
-           wh.SourceNumber || wh.source_number || wh.sourceNumber || wh.did ||
-           wh.agentNumber || wh.did_number || wh.didNumber ||
-           wh.message?.call?.agent?.number || wh.call?.agent?.number || "";
+           cleanPhone(wh.DisplayNumber || wh.display_number || wh.displayNumber) ||
+           cleanPhone(wh.SourceNumber || wh.source_number || wh.sourceNumber) ||
+           cleanPhone(wh.did || wh.agentNumber || wh.did_number || wh.didNumber) ||
+           cleanPhone(wh.message?.call?.agent?.number || wh.call?.agent?.number) || "";
          
          fallbackCustomerNumber =
-           wh.DestinationNumber || wh.destination_number || wh.destinationNumber ||
-           wh.caller || wh.to_number || wh.to ||
-           wh.customer_number || wh.customerNumber || "";
+           cleanPhone(wh.DestinationNumber || wh.destination_number || wh.destinationNumber) ||
+           cleanPhone(wh.caller || wh.to_number || wh.to) ||
+           cleanPhone(wh.customer_number || wh.customerNumber) || "";
          
          // Last resort: parse DID from callID (format: uuid-DID-CALLER-DATE-TIME)
-         const callIdRaw = wh.callID || wh.callId || wh.call_id || wh.uuid;
-         if (!fallbackAssignedNumber && callIdRaw && typeof callIdRaw === 'string') {
+         const callIdRaw = cleanPhone(wh.callID || wh.callId || wh.call_id || wh.uuid);
+         if (!fallbackAssignedNumber && callIdRaw.includes('-')) {
            const parts = callIdRaw.split('-');
-           if (parts.length >= 3) fallbackAssignedNumber = parts[1];
+           if (parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
          }
-         if (!fallbackCustomerNumber && callIdRaw && typeof callIdRaw === 'string') {
+         if (!fallbackCustomerNumber && callIdRaw.includes('-')) {
            const parts = callIdRaw.split('-');
-           if (parts.length >= 3) fallbackCustomerNumber = parts[2];
+           if (parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
          }
       }
 
-      // 2. Try providerRequest (sent payload usually has the DID)
+      // If providerCallId contains parts
+      if ((!fallbackAssignedNumber || !fallbackCustomerNumber) && call.providerCallId && call.providerCallId.includes('-')) {
+        const parts = call.providerCallId.split('-');
+        if (!fallbackAssignedNumber && parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
+        if (!fallbackCustomerNumber && parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
+      }
+
+      // 2. Try providerRequest
       if (!fallbackAssignedNumber && call.providerRequest && typeof call.providerRequest === 'object') {
         const req: any = call.providerRequest;
         fallbackAssignedNumber =
-          req.did_number || req.didNumber || req.agentNumber || req.from_number ||
-          req.agent?.number || req.call?.did_number || "";
+          cleanPhone(req.did_number || req.didNumber || req.agentNumber || req.from_number || req.agent?.number || req.call?.did_number);
       }
 
       // 3. Try providerResponse
       if (!fallbackAssignedNumber && call.providerResponse && typeof call.providerResponse === 'object') {
         const res: any = call.providerResponse;
         fallbackAssignedNumber =
-          res.did_number || res.didNumber || res.agentNumber || res.from || "";
+          cleanPhone(res.did_number || res.didNumber || res.agentNumber || res.from);
       }
 
       // 4. Try campaign's linked phone number
-      const campaignDid = (call as any).campaign?.phoneNumbers?.[0]?.number || "";
+      const campaignDid = cleanPhone((call as any).campaign?.phoneNumbers?.[0]?.number);
 
       // 5. Try the company's default outbound phone number
-      const companyDid = (call as any).company?.phoneNumbers?.[0]?.number || "";
+      const companyDid = cleanPhone((call as any).company?.phoneNumbers?.[0]?.number);
 
-      // The fallbackCustomerNumber was already extracted above (lines 175-189)
-
-      // 6. Determine callType (generic for all users/companies):
-      // - campaign:  campaignId is set  OR  correlationId starts with "camp-"
-      // - lead:      correlationId starts with "reactivation-"  OR  leadId is set (call was placed to a known lead via OBD/manual)
-      // - internal:  no leadId, no campaignId, no camp-/reactivation- correlationId (pure manual dial, agent-to-agent, or external API call)
-      //
-      // IMPORTANT: Internal calls may have companyId (if DID matched) or companyId=null (if webhook created log without PhoneNumber match).
-      // Both scenarios are valid internal calls and should be displayed in the outbound dashboard.
+      // 6. Determine callType:
+      // - campaign: campaignId is set OR correlationId starts with "camp-"
+      // - lead: correlationId starts with "reactivation-" OR leadId set (and not auto-created "Internal")
+      // - internal: pure manual dial, internal extension, or webhook-created unlinked call
       let callType: "lead" | "campaign" | "internal" = "internal";
       if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
         callType = "campaign";
       } else if (call.correlationId && call.correlationId.startsWith("reactivation-")) {
         callType = "lead";
-      } else if (call.publicId?.startsWith("bonvoice-") || (call.callLogId?.startsWith("CL") && !call.campaignId && !call.correlationId)) {
-        // Created dynamically from Bonvoice notification/hangup webhook without platform campaign/reactivation = internal call
-        callType = "internal";
-      } else if (call.leadId) {
-        // Any call placed to a lead (OBD CSV, manual lead dial, etc.) = "lead"
+      } else if (call.leadId && call.lead?.firstName !== "Internal") {
         callType = "lead";
       } else {
         callType = "internal";
       }
 
       // 7. Display status normalisation:
-      // If a call has a valid recording, it actually connected and recorded audio → it is COMPLETED!
       const hasRecording = Boolean(call.recordingUrl && String(call.recordingUrl).trim().length > 0);
-      const rawStatus = call.status.toLowerCase();
+      const rawStatus = (call.status || "").toLowerCase();
 
       let effectiveDurationSec = call.durationSeconds || 0;
       if (hasRecording && effectiveDurationSec === 0) {
         if (call.startedAt && call.endedAt) {
           const diff = Math.round((new Date(call.endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000);
-          if (diff > 0) effectiveDurationSec = diff;
+          if (diff > 0 && diff <= 3600) effectiveDurationSec = diff;
         }
         if (effectiveDurationSec === 0) {
-          effectiveDurationSec = 12;
+          effectiveDurationSec = 26; // sensible fallback
         }
       }
 
@@ -363,16 +377,22 @@ export async function GET(req: NextRequest) {
       const isLive = LIVE_STATUSES.includes(call.status);
       const finalStatus = isLive ? rawStatus : displayStatus;
 
+      // 8. Credits: 1.75 credits per 30s block
+      let effectiveCredits = call.creditsUsed || 0;
+      if (effectiveCredits === 0 && (hasRecording || displayStatus === "completed") && effectiveDurationSec > 0) {
+        effectiveCredits = Math.ceil(effectiveDurationSec / 30) * 1.75;
+      }
+
       return {
         id: call.id,
         callId: call.callLogId,
-        customerNumber: call.lead?.phone || fallbackCustomerNumber || "",
-        assignedNumber: call.phoneNumber?.number || fallbackAssignedNumber || campaignDid || companyDid || "",
+        customerNumber: cleanPhone(call.lead?.phone) || fallbackCustomerNumber || "",
+        assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || fallbackAssignedNumber || campaignDid || companyDid || "",
         callDateTime: call.startedAt.toISOString(),
         duration: effMinutes > 0 ? `${effMinutes}m ${effSeconds}s` : `${effSeconds}s`,
         durationSeconds: effectiveDurationSec,
         status: finalStatus,
-        creditsUsed: call.creditsUsed || 0,
+        creditsUsed: effectiveCredits,
         recordingUrl: finalStatus === "failed" ? undefined : (call.recordingUrl || undefined),
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],

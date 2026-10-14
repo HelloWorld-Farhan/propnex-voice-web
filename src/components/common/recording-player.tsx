@@ -18,6 +18,7 @@ type RecordingPlayerProps = {
   label?: string;
   compact?: boolean;
   className?: string;
+  onDurationChange?: (actualDurationSec: number) => void;
 };
 
 export function RecordingPlayer({
@@ -26,6 +27,7 @@ export function RecordingPlayer({
   label = "Recording",
   compact = false,
   className,
+  onDurationChange,
 }: RecordingPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
@@ -80,7 +82,11 @@ export function RecordingPlayer({
 
     const syncDuration = () => {
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
-        setMediaDuration(Math.round(audio.duration));
+        const rounded = Math.round(audio.duration);
+        setMediaDuration(rounded);
+        if (onDurationChange && rounded > 0 && rounded !== durationSeconds) {
+          onDurationChange(rounded);
+        }
       }
     };
 
@@ -122,7 +128,16 @@ export function RecordingPlayer({
 
     audioRef.current = audio;
     return audio;
-  }, [audioUrl]);
+  }, [audioUrl, durationSeconds, onDurationChange]);
+
+  useEffect(() => {
+    if (audioUrl) {
+      const audio = getOrCreateAudio();
+      if (audio && audio.readyState === 0) {
+        audio.load();
+      }
+    }
+  }, [audioUrl, getOrCreateAudio]);
 
   const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : 0);
 

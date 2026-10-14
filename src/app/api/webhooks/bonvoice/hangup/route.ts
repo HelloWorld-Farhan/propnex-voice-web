@@ -84,8 +84,37 @@ export async function POST(req: Request) {
     console.log(`Bonvoice Hangup: dir=${isInbound ? "INBOUND" : "OUTBOUND"} DID=${didNumber} caller=${callerNumber} callID=${callID}`);
 
     const recordingUrl = ResourceURL || "";
-    let durationSec  = parseInt(String(actualDuration)) || 0;
     const callCost     = cost ? parseFloat(String(cost)) : 0;
+
+    let startTimeParsed = new Date();
+    if (StartTime) {
+      const stStr = String(StartTime);
+      if (stStr.includes("T")) {
+        startTimeParsed = new Date(stStr);
+      } else {
+        startTimeParsed = new Date(`${stStr.replace(" ", "T")}+05:30`);
+      }
+      if (isNaN(startTimeParsed.getTime())) startTimeParsed = new Date();
+    }
+
+    let endTimeParsed = new Date();
+    if (EndTime) {
+      const etStr = String(EndTime);
+      if (etStr.includes("T")) {
+        endTimeParsed = new Date(etStr);
+      } else {
+        endTimeParsed = new Date(`${etStr.replace(" ", "T")}+05:30`);
+      }
+      if (isNaN(endTimeParsed.getTime())) endTimeParsed = new Date();
+    }
+
+    let durationSec = parseInt(String(actualDuration)) || 0;
+    if (durationSec === 0 && StartTime && EndTime) {
+      const timeDiff = Math.round((endTimeParsed.getTime() - startTimeParsed.getTime()) / 1000);
+      if (timeDiff > 0 && timeDiff <= 3600) {
+        durationSec = timeDiff;
+      }
+    }
 
     let finalMappedStatus = "COMPLETED"; // default for hangup
     
@@ -110,7 +139,7 @@ export async function POST(req: Request) {
       if (recordingUrl && recordingUrl.trim().length > 0) {
         finalMappedStatus = "COMPLETED";
         if (durationSec === 0) {
-          durationSec = 12; // Fallback to recorded audio duration if provider left CallDuration empty
+          durationSec = 26; // Sensible fallback for recorded audio
         }
       } else if (effectiveStatus === "ANSWERED" && durationSec > 0) {
         finalMappedStatus = "COMPLETED";
@@ -134,6 +163,8 @@ export async function POST(req: Request) {
     if (durationSec > 0) {
       const blocks = Math.ceil(durationSec / 30);
       creditsUsed = blocks * 1.75;
+    } else if (finalMappedStatus === "COMPLETED" || (recordingUrl && recordingUrl.trim().length > 0)) {
+      creditsUsed = 1.75;
     }
 
     const didVariants = phoneVariants(didNumber);
@@ -143,103 +174,78 @@ export async function POST(req: Request) {
     let existingLogs: any[] = [];
     let eventId = data.eventID || data.eventId || data.event_id || data.EventID || data.EventId || "";
     if (callID && typeof callID === "string" && callID.includes("xx")) {
-      eventId = callID.split("xx")[0];
+      const rawPfx = callID.split("xx")[0];
+      if (!rawPfx.startsWith("20260909_")) {
+        eventId = rawPfx;
+      }
     }
+    const isGenericEventId = eventId.startsWith("20260909_");
 
-    if (callID || eventId) {
+    if (callID || (eventId && !isGenericEventId)) {
       existingLogs = await prisma.callLog.findMany({
         where: {
           OR: [
             ...(callID ? [{ providerCallId: String(callID) }] : []),
-            ...(eventId ? [{ callLogId: eventId }] : []),
-            ...(eventId ? [{ publicId: eventId }] : [])
+            ...((eventId && !isGenericEventId) ? [{ callLogId: eventId }, { publicId: eventId }] : [])
           ]
         },
-        include: { phoneNumber: { include: { company: true } } },
+        include: { phoneNumber: { include: { company: true } }, lead: true },
       });
     }
 
-    // 2. Find call logs by DID (RINGING/ANSWERED status) - as fallback if callID missing
+    // 2. Find call logs by DID (RINGING/ANSWERED status) - as fallback if callID missing, MUST match caller if known
     if (existingLogs.length === 0 && didVariants.length > 0) {
-      existingLogs = await prisma.callLog.findMany({
+      const liveLogs = await prisma.callLog.findMany({
         where: {
           status:      { in: ["RINGING", "ANSWERED", "QUEUED", "DISPATCHING", "QUEUED_AT_PROVIDER", "PENDING"] },
           phoneNumber: { number: { in: didVariants } },
-        },
-        include: { phoneNumber: { include: { company: true } } },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-      });
-      // Filter out old calls (older than 1 hour)
-      existingLogs = existingLogs.filter((log: any) => Date.now() - log.createdAt.getTime() < 3600000);
-    }
-
-    // 3. Last resort: look for a platform-created log with OUT-/pending- prefix providerCallId
-    // that matches the DID phone number — covers the case where notification webhook arrived
-    // before we could link the Bonvoice callID to the platform log
-    if (existingLogs.length === 0 && didVariants.length > 0) {
-      const callerCoreStr = corePhone(callerNumber);
-      const platformLogs = await prisma.callLog.findMany({
-        where: {
-          phoneNumber: { number: { in: didVariants } },
-          OR: [
-            { providerCallId: { startsWith: "OUT-" } },
-            { providerCallId: { startsWith: "pending-" } },
-            { providerCallId: { startsWith: "DISP-" } },
-          ],
         },
         include: { phoneNumber: { include: { company: true } }, lead: true },
         orderBy: { createdAt: "desc" },
         take: 10,
       });
-      // Filter by caller phone if available, else take most recent within 2 hours
-      const recentPlatform = platformLogs.filter((l: any) => Date.now() - l.createdAt.getTime() < 7200000);
-      if (callerCoreStr) {
-        const callerMatch = recentPlatform.filter((l: any) => (l.lead?.phone || "").replace(/\D/g, "").slice(-10) === callerCoreStr.slice(-10));
-        existingLogs = callerMatch.length > 0 ? callerMatch : recentPlatform.slice(0, 1);
+      const recentLive = liveLogs.filter((log: any) => Date.now() - log.createdAt.getTime() < 3600000);
+      if (callerCore) {
+        existingLogs = recentLive.filter((l: any) => (l.lead?.phone || "").replace(/\D/g, "").slice(-10) === callerCore.slice(-10));
       } else {
-        existingLogs = recentPlatform.slice(0, 1);
+        existingLogs = recentLive.slice(0, 1);
+      }
+    }
+
+    // 3. Last resort: look for a platform-created log with OUT-/pending- prefix providerCallId
+    // that matches BOTH the DID AND the caller/customer number
+    if (existingLogs.length === 0 && didVariants.length > 0) {
+      const callerCoreStr = corePhone(callerNumber);
+      if (callerCoreStr) {
+        const platformLogs = await prisma.callLog.findMany({
+          where: {
+            phoneNumber: { number: { in: didVariants } },
+            lead: { phone: { contains: callerCoreStr.slice(-10) } },
+            OR: [
+              { providerCallId: { startsWith: "OUT-" } },
+              { providerCallId: { startsWith: "pending-" } },
+              { providerCallId: { startsWith: "DISP-" } },
+            ],
+          },
+          include: { phoneNumber: { include: { company: true } }, lead: true },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        });
+        existingLogs = platformLogs.filter((l: any) => Date.now() - l.createdAt.getTime() < 7200000);
       }
       if (existingLogs.length > 0) {
-        console.log(`Bonvoice Hangup: Found ${existingLogs.length} platform log(s) via OUT-/pending- fallback lookup`);
+        console.log(`Bonvoice Hangup: Found ${existingLogs.length} platform log(s) matching caller ${callerCoreStr}`);
       }
-    }
-
-
-    let startTimeParsed = new Date();
-    if (StartTime) {
-      const stStr = String(StartTime);
-      if (stStr.includes("T")) {
-        startTimeParsed = new Date(stStr);
-      } else {
-        startTimeParsed = new Date(`${stStr.replace(" ", "T")}+05:30`);
-      }
-      if (isNaN(startTimeParsed.getTime())) startTimeParsed = new Date();
-    }
-
-    let endTimeParsed = new Date();
-    if (EndTime) {
-      const etStr = String(EndTime);
-      if (etStr.includes("T")) {
-        endTimeParsed = new Date(etStr);
-      } else {
-        endTimeParsed = new Date(`${etStr.replace(" ", "T")}+05:30`);
-      }
-      if (isNaN(endTimeParsed.getTime())) endTimeParsed = new Date();
     }
 
     const logsToCharge: { companyId: string; callLogId: string }[] = [];
 
     if (existingLogs.length > 0) {
-      // 3a. Update existing call logs → COMPLETED
-      // If multiple logs exist (e.g. from historical duplicate bug), select the primary one for credit deduction
+      // 3a. Update existing call logs
       const primaryLog = existingLogs.find((l: any) => l.companyId && l.phoneNumber?.company?.parentCompanyId)
         || existingLogs.find((l: any) => l.companyId)
         || existingLogs[0];
 
-      // Check if this inbound call is on an outbound-only number.
-      // ONLY apply when direction is explicitly inbound — don't drop outbound calls
-      // that have no Direction field (e.g. external calls via Postman/API).
       const phoneDir = (primaryLog?.phoneNumber?.direction || "").toUpperCase();
       const isOutboundOnlyInbound = isInbound && isDirectionExplicit && primaryLog?.phoneNumber && phoneDir !== "INBOUND" && phoneDir !== "BOTH";
 
@@ -278,18 +284,23 @@ export async function POST(req: Request) {
         }
 
         const isPrimary = log.id === primaryLog?.id;
+        const safeStatus = (log.recordingUrl || recordingUrl) ? "COMPLETED" : finalMappedStatus;
+        const safeDuration = (safeStatus === "COMPLETED" && durationSec === 0) 
+          ? (log.durationSeconds > 0 ? log.durationSeconds : 26) 
+          : (durationSec > 0 ? durationSec : log.durationSeconds);
+        const safeCredits = safeDuration > 0 ? Math.ceil(safeDuration / 30) * 1.75 : creditsUsed;
 
         await prisma.callLog.update({
           where: { id: log.id },
           data: {
-            status:          finalMappedStatus as any,
-            durationSeconds: durationSec,
+            status:          safeStatus as any,
+            durationSeconds: safeDuration,
             cost:            isPrimary && !isOutboundOnlyInbound ? callCost : 0,
-            creditsUsed:     isPrimary && !isOutboundOnlyInbound ? creditsUsed : 0,
+            creditsUsed:     isPrimary && !isOutboundOnlyInbound ? safeCredits : 0,
             recordingUrl:    recordingUrl || undefined,
             endedAt:         endTimeParsed,
             providerCallId:  String(callID),
-            providerStatus:  finalMappedStatus,
+            providerStatus:  safeStatus,
             providerWebhook: data,
             historicalDidString: log.historicalDidString || didNumber,
             historicalChannels: log.historicalChannels || 1,

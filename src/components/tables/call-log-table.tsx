@@ -59,6 +59,31 @@ export function CallLogTable({
   className,
 }: CallLogTableProps) {
   const isInbound = variant === "inbound";
+  const [accurateDurations, setAccurateDurations] = useState<Record<string, number>>({});
+
+  const handleDurationLoaded = (callId: string, realSec: number) => {
+    setAccurateDurations((prev) => {
+      if (prev[callId] === realSec) return prev;
+      return { ...prev, [callId]: realSec };
+    });
+
+    // Quietly sync with server database
+    fetch("/api/calls/sync-duration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callId, durationSeconds: realSec }),
+    }).catch(() => {});
+  };
+
+  const cleanDisplayNumber = (num?: string | null) => {
+    if (!num) return "";
+    const trimmed = String(num).trim();
+    if (!trimmed || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "null") return "";
+    if (trimmed.startsWith("+")) return trimmed;
+    const digits = trimmed.replace(/\D/g, "");
+    const core = digits.replace(/^91/, "").replace(/^0+/, "");
+    return core ? `+91${core}` : trimmed;
+  };
 
   return (
     <div className={cn("glass-card overflow-hidden rounded-2xl", className)}>
@@ -95,6 +120,36 @@ export function CallLogTable({
           <tbody>
             {calls.map((call) => {
               const isLive = call.status === "answered" || call.status === "in-progress";
+              const realDurationSec = accurateDurations[call.id] ?? call.durationSeconds ?? 0;
+              const effMins = Math.floor(realDurationSec / 60);
+              const effSecs = realDurationSec % 60;
+              const formattedDuration = isLive && call.liveStartedAt ? (
+                <LiveDuration startedAt={call.liveStartedAt} />
+              ) : realDurationSec > 0 ? (
+                effMins > 0 ? `${effMins}m ${effSecs}s` : `${effSecs}s`
+              ) : (
+                call.duration || "0s"
+              );
+
+              // 1.75 credits per 30-second block for outbound completed calls
+              const calculatedCredits = realDurationSec > 0
+                ? Math.ceil(realDurationSec / 30) * 1.75
+                : (call.creditsUsed || 0);
+
+              const isCompletedOrRecorded = call.status?.toLowerCase() === "completed" || Boolean(call.recordingUrl);
+              const displayCredits = isLive ? (
+                <span className="text-xs text-muted-foreground">—</span>
+              ) : (call.creditsUsed && call.creditsUsed > 0 && !accurateDurations[call.id]) ? (
+                call.creditsUsed % 1 === 0 ? call.creditsUsed : call.creditsUsed.toFixed(2)
+              ) : isCompletedOrRecorded && realDurationSec > 0 ? (
+                calculatedCredits % 1 === 0 ? calculatedCredits : calculatedCredits.toFixed(2)
+              ) : (
+                call.creditsUsed || 0
+              );
+
+              const customerFormatted = cleanDisplayNumber(call.customerNumber);
+              const assignedFormatted = cleanDisplayNumber(call.assignedNumber);
+
               return (
                 <tr
                   key={call.id}
@@ -110,28 +165,28 @@ export function CallLogTable({
                           "text-[9px] uppercase font-bold tracking-wider",
                           call.callType === "campaign" ? "text-fuchsia-500/80" :
                           call.callType === "lead" ? "text-emerald-500/80" :
-                          "text-blue-500/80"
+                          "text-purple-400 font-semibold"
                         )}>
                           {call.callType === "internal" ? "Internal" : call.callType}
                         </span>
                       )}
                       <span>
-                        {call.customerNumber?.startsWith('+') ? call.customerNumber : `+91${call.customerNumber?.replace(/^[0]+/, '') || ''}`}
+                        {customerFormatted || <span className="opacity-40">—</span>}
                       </span>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground font-mono text-sm">
-                    {call.assignedNumber ? (call.assignedNumber.startsWith('+') ? call.assignedNumber : `+91${call.assignedNumber.replace(/^[0]+/, '')}`) : <span className="opacity-40">—</span>}
+                    {assignedFormatted ? (
+                      assignedFormatted
+                    ) : (
+                      <span className="opacity-40">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
                     {formatCallDate(call.callDateTime)}
                   </td>
                   <td className="px-4 py-3 tabular-nums">
-                    {isLive && call.liveStartedAt ? (
-                      <LiveDuration startedAt={call.liveStartedAt} />
-                    ) : (
-                      call.duration
-                    )}
+                    {formattedDuration}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={call.status} />
@@ -139,9 +194,10 @@ export function CallLogTable({
                   <td className="px-4 py-3">
                     {call.recordingUrl && call.status !== "failed" ? (
                       <RecordingPlayer
-                        durationSeconds={call.durationSeconds}
+                        durationSeconds={realDurationSec > 0 ? realDurationSec : call.durationSeconds}
                         audioUrl={call.recordingUrl}
                         compact
+                        onDurationChange={(sec) => handleDurationLoaded(call.id, sec)}
                       />
                     ) : isLive ? (
                       <span className="text-xs text-emerald-500 font-medium">In progress…</span>
@@ -162,11 +218,7 @@ export function CallLogTable({
                     </Button>
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums font-medium text-foreground">
-                    {isLive ? (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    ) : (
-                      call.creditsUsed
-                    )}
+                    {displayCredits}
                   </td>
                 </tr>
               );
