@@ -16,6 +16,7 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
   const [isInitializing, setIsInitializing] = useState(true);
   const ignorePollingUntil = useRef<number>(0);
   const hasClearedFailedCalls = useRef<boolean>(false);
+  const isPollingRef = useRef<boolean>(false);
 
   const getClearedCampaigns = useCallback(() => {
     if (typeof window === 'undefined') return [];
@@ -287,11 +288,14 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
 
   // Fallback HTTP polling in case WebSocket events are missed (e.g. dropped connection)
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: NodeJS.Timeout | null = null;
+    let isMounted = true;
     
     if (campaign.status === "running") {
       interval = setInterval(async () => {
         if (Date.now() < ignorePollingUntil.current) return;
+        if (isPollingRef.current) return; // Prevent overlapping requests
+        isPollingRef.current = true;
         
         try {
           const storedUserStr = localStorage.getItem("user");
@@ -306,7 +310,7 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
             headers: { Authorization: `Bearer ${pnxToken}` }
           });
 
-          if (res.ok) {
+          if (res.ok && isMounted) {
             const { data } = await res.json();
             if (data) {
               setCampaign(prev => {
@@ -346,11 +350,14 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
           }
         } catch (err) {
           console.error("Failed to poll campaign status:", err);
+        } finally {
+          isPollingRef.current = false;
         }
       }, 15000); // Changed from 2s to 15s to rely on WebSockets for instant updates
     }
     
     return () => {
+      isMounted = false;
       if (interval) clearInterval(interval);
     };
   }, [campaign.status]);

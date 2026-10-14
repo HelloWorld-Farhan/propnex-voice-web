@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { PhoneOutgoing, CheckCircle2, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -15,7 +15,6 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { TranscriptDrawer } from "@/components/common/transcript-drawer";
-import { useEffect } from "react";
 import { EmptyState } from "@/components/common/empty-state";
 import { CallLogFiltersBar } from "@/components/forms/call-log-filters";
 import { CallLogTable } from "@/components/tables/call-log-table";
@@ -109,6 +108,7 @@ export function OutboundPageContent() {
   const [rescheduleDid, setRescheduleDid] = useState("");
   const [persistentFailedLeads, setPersistentFailedLeads] = useState<any[]>([]);
   const [persistentFailedLeadsInfo, setPersistentFailedLeadsInfo] = useState<any>({});
+  const isCheckingSubcompaniesRef = useRef(false);
 
   useEffect(() => {
     // Normal execution
@@ -339,7 +339,12 @@ export function OutboundPageContent() {
   useEffect(() => {
     if (!user || user.role !== "COMPANY_OWNER") return;
 
+    let isMounted = true;
+
     const checkForSubcompanyCompletions = async () => {
+      if (isCheckingSubcompaniesRef.current) return;
+      isCheckingSubcompaniesRef.current = true;
+
       try {
         const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token");
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
@@ -347,26 +352,29 @@ export function OutboundPageContent() {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        if (!companiesRes.ok) return;
+        if (!companiesRes.ok || !isMounted) return;
         const companiesData = await companiesRes.json();
         const subCompanies = companiesData.filter((c: any) => c.parentCompanyId === user.companyId);
 
         for (const sub of subCompanies) {
+          if (!isMounted) break;
           const statusRes = await fetch(`${apiBase === '/api' ? '' : apiBase}/api/campaign-execution/status?companyId=${sub.id}`, {
             headers: { Authorization: `Bearer ${token}` }
           });
           
-          if (statusRes.ok) {
+          if (statusRes.ok && isMounted) {
             const statusData = await statusRes.json();
             if (statusData?.data?.status === "completed") {
               const ackKey = `ack_sub_camp_completed_${sub.id}_${statusData.data.id || 'recent'}`;
               if (!localStorage.getItem(ackKey)) {
                 localStorage.setItem(ackKey, "true");
-                setAnimationState({
-                  title: "Sub-Company Campaign Completed!",
-                  subtitle: `Campaign for ${sub.name} has finished.`,
-                  type: "campaign"
-                });
+                if (isMounted) {
+                  setAnimationState({
+                    title: "Sub-Company Campaign Completed!",
+                    subtitle: `Campaign for ${sub.name} has finished.`,
+                    type: "campaign"
+                  });
+                }
                 // We leave the state in Redis. The sub-company tab will clear it when visited.
               }
             }
@@ -374,14 +382,19 @@ export function OutboundPageContent() {
         }
       } catch (err) {
         // Silently ignore polling errors
+      } finally {
+        isCheckingSubcompaniesRef.current = false;
       }
     };
 
     // Run once on mount and then poll every 15s
     checkForSubcompanyCompletions();
     const intervalId = setInterval(checkForSubcompanyCompletions, 15000);
-    return () => clearInterval(intervalId);
-  }, [user]);
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [user?.companyId, user?.role]);
 
   const handleReschedule = async () => {
     try {

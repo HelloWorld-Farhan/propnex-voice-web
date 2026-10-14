@@ -26,7 +26,7 @@ import {
   StopCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -280,6 +280,10 @@ export function CampaignCard({
   const [reactivationSearchQuery, setReactivationSearchQuery] = useState("");
   const [allNumbersSearchQuery, setAllNumbersSearchQuery] = useState("");
 
+  const historicalCampaignsRef = useRef<any[]>(historicalCampaigns);
+  historicalCampaignsRef.current = historicalCampaigns;
+  const isFetchingDashboardRef = useRef<boolean>(false);
+
   // ─── Nightly calculation window detection (11:45 PM – 00:05 AM IST) ───
   useEffect(() => {
     const checkCalculatingWindow = () => {
@@ -298,79 +302,107 @@ export function CampaignCard({
     return () => clearInterval(t);
   }, []);
 
-
   useEffect(() => {
-    if (isReactivationCard) {
-      const fetchDashboard = () => {
-        const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
-        fetch(`/api/reactivation/dashboard?t=${Date.now()}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store"
-        })
-          .then(res => res.json())
-          .then(res => {
-            if (res.data) {
-                setHistoricalCampaigns(res.data);
-                try {
-                  localStorage.setItem("cached_reactivation_campaigns", JSON.stringify(res.data));
-                } catch (e) {}
-                if (res.data.length > 0) {
-                  // Select the first one automatically if none is selected
-                  setSelectedHistId(prev => prev || res.data[0].id);
-                }
-                
-                // Trigger animation for any wave that is completed but not yet shown
-                const todayStr = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date()).replace("Sept", "Sep");
-                const todayStrAlt = todayStr.replace("Sep", "Sept");
+    if (!isReactivationCard) return;
 
-                res.data.forEach((bucket: any) => {
-                  ['q1', 'q2', 'q3'].forEach((qKey, idx) => {
-                    const wave = bucket[qKey];
-                    // We only want to trigger the animation if the wave completed *today* 
-                    // (its scheduled string should contain today's date)
-                    if (wave?.status === "Completed" && (wave.scheduled?.startsWith(todayStr) || wave.scheduled?.startsWith(todayStrAlt))) {
-                      const shownKey = `reactivation_animation_shown_${bucket.id}_${qKey}`;
-                      if (!localStorage.getItem(shownKey)) {
-                        localStorage.setItem(shownKey, "true");
-                        
-                        const waveNum = idx + 1;
-                        let title = `Wave ${waveNum} Completed`;
-                        let subtitle = `Lead Reactivation Wave ${waveNum} finished.`;
-                        if (waveNum === 3) {
-                          title = "Lead Reactivation Completed";
-                          subtitle = "All 3 waves finished.";
-                        }
-                        
-                        // We add a tiny delay to ensure consecutive waves don't clash
-                        setTimeout(() => {
-                          window.dispatchEvent(new CustomEvent('triggerReactivationAnimation', {
-                            detail: { title, subtitle, type: "reactivation" }
-                          }));
-                        }, idx * 2500); // staggering animations if multiple complete at once
-                      }
-                    }
-                  });
-                });
-              }
-            })
-          .catch(err => console.error("Failed to fetch reactivation dashboard", err))
-          .finally(() => setIsHistoricalLoading(false));
-      };
-      
-      // Fetch dashboard without triggering loading state UI changes
-      fetchDashboard();
+    let isMounted = true;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-      // Realtime polling:
-      // - 2500ms when any wave is Running OR modal is open (real-time counters)
-      // - 10000ms when all waves are idle/pending/completed
-      const anyRunning = historicalCampaigns.some(
+    const scheduleNextPoll = () => {
+      if (!isMounted) return;
+      if (pollTimer) clearTimeout(pollTimer);
+
+      const anyRunning = (historicalCampaignsRef.current || []).some(
         (h: any) => h.q1?.status === "Running" || h.q2?.status === "Running" || h.q3?.status === "Running"
       );
       const pollMs = (leadsModalOpen || anyRunning) ? 2500 : 10000;
-      const interval = setInterval(fetchDashboard, pollMs);
-      return () => clearInterval(interval);
-    }
-  }, [isReactivationCard, leadsModalOpen, historicalCampaigns]);
+
+      pollTimer = setTimeout(() => {
+        fetchDashboard();
+      }, pollMs);
+    };
+
+    const fetchDashboard = async () => {
+      if (isFetchingDashboardRef.current) return;
+      isFetchingDashboardRef.current = true;
+
+      try {
+        const token = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
+        const res = await fetch(`/api/reactivation/dashboard?t=${Date.now()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store"
+        });
+        if (!res.ok) throw new Error(`Dashboard status ${res.status}`);
+        const json = await res.json();
+
+        if (isMounted && json.data) {
+          // Compare data signature to prevent unnecessary re-renders when data hasn't changed
+          const currentSig = (historicalCampaignsRef.current || [])
+            .map((b: any) => `${b.id}_${b.date}_${b.q1?.status}_${b.q1?.completedCalls}_${b.q2?.status}_${b.q2?.completedCalls}_${b.q3?.status}_${b.q3?.completedCalls}`)
+            .join("|");
+          const nextSig = (json.data || [])
+            .map((b: any) => `${b.id}_${b.date}_${b.q1?.status}_${b.q1?.completedCalls}_${b.q2?.status}_${b.q2?.completedCalls}_${b.q3?.status}_${b.q3?.completedCalls}`)
+            .join("|");
+
+          if (currentSig !== nextSig) {
+            setHistoricalCampaigns(json.data);
+            try {
+              localStorage.setItem("cached_reactivation_campaigns", JSON.stringify(json.data));
+            } catch (e) {}
+            if (json.data.length > 0) {
+              setSelectedHistId(prev => prev || json.data[0].id);
+            }
+          }
+
+          // Trigger animation for any wave that is completed but not yet shown
+          const todayStr = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date()).replace("Sept", "Sep");
+          const todayStrAlt = todayStr.replace("Sep", "Sept");
+
+          json.data.forEach((bucket: any) => {
+            ['q1', 'q2', 'q3'].forEach((qKey, idx) => {
+              const wave = bucket[qKey];
+              if (wave?.status === "Completed" && (wave.scheduled?.startsWith(todayStr) || wave.scheduled?.startsWith(todayStrAlt))) {
+                const shownKey = `reactivation_animation_shown_${bucket.id}_${qKey}`;
+                if (!localStorage.getItem(shownKey)) {
+                  localStorage.setItem(shownKey, "true");
+                  
+                  const waveNum = idx + 1;
+                  let title = `Wave ${waveNum} Completed`;
+                  let subtitle = `Lead Reactivation Wave ${waveNum} finished.`;
+                  if (waveNum === 3) {
+                    title = "Lead Reactivation Completed";
+                    subtitle = "All 3 waves finished.";
+                  }
+                  
+                  setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('triggerReactivationAnimation', {
+                      detail: { title, subtitle, type: "reactivation" }
+                    }));
+                  }, idx * 2500);
+                }
+              }
+            });
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch reactivation dashboard", err);
+      } finally {
+        isFetchingDashboardRef.current = false;
+        if (isMounted) {
+          setIsHistoricalLoading(false);
+          scheduleNextPoll();
+        }
+      }
+    };
+
+    // Initial fetch on mount or modal toggle
+    fetchDashboard();
+
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [isReactivationCard, leadsModalOpen]);
 
   const todayStr = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date()).replace("Sept", "Sep");
   const todayBucket = historicalCampaigns.find(h => h.date === todayStr || h.date === todayStr.replace("Sep", "Sept"));
