@@ -339,10 +339,9 @@ export async function GET(req: NextRequest) {
       // Reactivation day is the day following the original failed leads day
       const reactivationDateStr = istFmt.format(new Date(b.originalDateMs + 24 * 60 * 60 * 1000));
       const isPastDay = reactivationDateStr < todayIstStr;
-      const q3CutoffTime = new Date(`${reactivationDateStr}T23:45:00+05:30`);
-      const isPastQ3Cutoff = isPastDay || (nowMs >= q3CutoffTime.getTime());
       const isPastQ1Cutoff = isPastDay || (nowMs >= b.q1CutoffTime.getTime());
       const isPastQ2Cutoff = isPastDay || (nowMs >= b.q2CutoffTime.getTime());
+      // USER REQUIREMENT: Wave 3 has NO time limit and must run until all leads are contacted.
 
       // Fast set of attempted phones for Wave 1 to check if all leads have been attempted
       const q1AttemptedPhones = new Set(
@@ -483,12 +482,10 @@ export async function GET(req: NextRequest) {
             if (q3IsStalePending && q3Log?.id) {
               prisma.callLog.update({ where: { id: q3Log.id }, data: { status: "FAILED", durationSeconds: 0 } }).catch(() => {});
             }
-            const isRingingInQ3 = !completedInQ3 && !isPastQ3Cutoff && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
+            const isRingingInQ3 = !completedInQ3 && !!q3Log && LIVE_STATUSES.includes(q3LogStatus) && !q3IsStalePending;
 
             const isAttemptedQ3 = !!q3Log;
-            const failedInQ3 = isPastQ3Cutoff
-              ? !completedInQ3
-              : (!completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (isAttemptedQ3 && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus))));
+            const failedInQ3 = !completedInQ3 && !isRingingInQ3 && (q3IsStalePending || (isAttemptedQ3 && ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"].includes(q3LogStatus)));
 
             const leadQ3Data = {
               ...lead,
@@ -514,7 +511,7 @@ export async function GET(req: NextRequest) {
         b.q2.status = "Running";
       }
 
-      // Wave 3 Status Evaluation (8:00 PM IST scheduled, 11:45 PM IST cutoff)
+      // Wave 3 Status Evaluation (8:00 PM IST start, NO time limit until all leads completed)
       if (!canRolloverToQ3) {
         b.q3.status = "Pending";
       } else {
@@ -522,7 +519,7 @@ export async function GET(req: NextRequest) {
           const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
           return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
         });
-        const q3Finished = isPastQ3Cutoff || (allQ3Attempted && !q3Running) || (!q3Running && hasQ3Attempted && q3QuietMs > 10 * 60 * 1000);
+        const q3Finished = allQ3Attempted && !q3Running;
 
         if (q3Finished) {
           b.q3.status = "Completed";
@@ -552,7 +549,7 @@ export async function GET(req: NextRequest) {
       // Check if all leads are completed in Wave 3
       if (b.q3.status === "Running" && q3FinalList.length > 0) {
         const allQ3Done = q3FinalList.every(l => l.isCompleted || l.isFailed);
-        if (allQ3Done || isPastQ3Cutoff) {
+        if (allQ3Done) {
           b.q3.status = "Completed";
         }
       }

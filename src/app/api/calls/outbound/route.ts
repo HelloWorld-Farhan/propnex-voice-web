@@ -175,6 +175,23 @@ export async function GET(req: NextRequest) {
         });
       }
 
+      // STRICT USER REQUIREMENT:
+      // Outbound Call Logs table must ONLY show COMPLETED lead calls (duration > 0 and credits deducted).
+      // Failed, missed, or in-progress LEAD reactivation calls belong exclusively in the Lead Reactivation dashboard.
+      andConditions.push({
+        OR: [
+          { correlationId: null },
+          { NOT: { correlationId: { startsWith: "reactivation-" } } },
+          {
+            AND: [
+              { correlationId: { startsWith: "reactivation-" } },
+              { status: "COMPLETED" },
+              { durationSeconds: { gt: 0 } },
+            ],
+          },
+        ],
+      });
+
       if (andConditions.length > 0) {
         whereClause.AND = andConditions;
       }
@@ -194,6 +211,9 @@ export async function GET(req: NextRequest) {
         { companyId: { in: companyIdsToQuery } },
         ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
         ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
+      ],
+      NOT: [
+        { correlationId: { startsWith: "reactivation-" } }
       ],
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
     };
@@ -324,6 +344,12 @@ export async function GET(req: NextRequest) {
         liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
         callType,
       };
+    }).filter((call) => {
+      // Outbound Call Logs table must strictly ONLY show completed lead calls
+      if (call.callType === "lead" && (call.status !== "completed" || call.durationSeconds <= 0)) {
+        return false;
+      }
+      return true;
     });
 
     const adjustedTotal = Math.max(mappedCalls.length, total);
