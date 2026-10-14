@@ -179,13 +179,17 @@ export function RecordingPlayer({
     });
 
     audio.addEventListener("error", () => {
-      if (retryCountRef.current < 3) {
+      if (retryCountRef.current < 4) {
         retryCountRef.current += 1;
         const delay = retryCountRef.current * 700;
         setTimeout(() => {
           if (audioRef.current && audioUrl) {
             try {
-              audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
+              if (retryCountRef.current >= 3) {
+                audioRef.current.src = audioUrl;
+              } else {
+                audioRef.current.src = `/api/audio-proxy?url=${encodeURIComponent(audioUrl)}&t=${Date.now()}`;
+              }
               audioRef.current.load();
             } catch {}
           }
@@ -215,7 +219,8 @@ export function RecordingPlayer({
   const handleToggle = () => {
     if (!audioUrl) return;
 
-    const audio = getOrCreateAudio();
+    // If previously in error or retry state, re-instantiate fresh audio
+    const audio = hasError ? getOrCreateAudio(true) : getOrCreateAudio();
     if (!audio) return;
 
     if (isPlaying) {
@@ -292,27 +297,6 @@ export function RecordingPlayer({
   const progressPercent = currentDuration > 0 ? (progress / currentDuration) * 100 : 0;
 
   if (compact) {
-    if (hasError) {
-      return (
-        <div className={cn("flex items-center gap-1.5", className)}>
-          <span className="text-xs text-muted-foreground">Not found</span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleRetry();
-            }}
-            aria-label="Retry loading recording"
-            title="Retry loading recording"
-          >
-            <RotateCw className="size-3" />
-          </Button>
-        </div>
-      );
-    }
-
     return (
       <div className={cn("flex items-center gap-2", className)}>
         <Button
@@ -355,28 +339,6 @@ export function RecordingPlayer({
             )}
           </Button>
         )}
-      </div>
-    );
-  }
-
-  if (hasError) {
-    return (
-      <div
-        className={cn(
-          "glass-card rounded-xl p-4 space-y-3 min-w-[220px] flex flex-col items-center justify-center",
-          className
-        )}
-      >
-        <span className="text-xs font-medium text-destructive">Recording Not Found</span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-xs h-8"
-          onClick={handleRetry}
-        >
-          <RotateCw className="size-3.5 mr-1.5" />
-          Retry
-        </Button>
       </div>
     );
   }
