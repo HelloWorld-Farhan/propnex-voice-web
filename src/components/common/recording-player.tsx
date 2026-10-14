@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef, useId, useCallback } from "react";
+import { useEffect, useState, useRef, useId } from "react";
 import { Check, Copy, Pause, Play, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+/** How long (ms) we wait for audio to start playing before calling it a stall/error */
+const PLAY_STALL_TIMEOUT_MS = 12000;
 
 function formatTime(seconds: number) {
   if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) return "0:00";
@@ -36,12 +39,39 @@ export function RecordingPlayer({
   const [isBuffering, setIsBuffering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [mediaDuration, setMediaDuration] = useState<number>(durationSeconds > 0 ? durationSeconds : 0);
   const [cacheBuster, setCacheBuster] = useState<number>(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playerId = useId();
+
+  const clearStallTimer = () => {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  };
+
+  const triggerError = (msg: string) => {
+    clearStallTimer();
+    setIsBuffering(false);
+    setIsPlaying(false);
+    setHasError(true);
+    setErrorMsg(msg);
+    console.warn("[RecordingPlayer] Error:", msg);
+  };
+
+  const startStallTimer = () => {
+    clearStallTimer();
+    stallTimerRef.current = setTimeout(() => {
+      if (audioRef.current && audioRef.current.paused) {
+        triggerError("Timed out — recording may still be processing");
+      }
+    }, PLAY_STALL_TIMEOUT_MS);
+  };
 
   // Compute the safe audio proxy URL
   const proxyUrl = audioUrl
@@ -56,6 +86,12 @@ export function RecordingPlayer({
     }
   }, [durationSeconds]);
 
+  // Cleanup stall timer on unmount
+  useEffect(() => {
+    return () => { clearStallTimer(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Global listener: pause this player whenever any other player starts
   useEffect(() => {
     const handleGlobalPlay = (e: Event) => {
@@ -67,6 +103,7 @@ export function RecordingPlayer({
             audioRef.current.pause();
           } catch {}
         }
+        clearStallTimer();
         setIsPlaying(false);
         setIsBuffering(false);
       }
@@ -109,6 +146,7 @@ export function RecordingPlayer({
     const audio = audioRef.current;
 
     if (isPlaying) {
+      clearStallTimer();
       audio.pause();
       setIsPlaying(false);
       setIsBuffering(false);
@@ -133,20 +171,25 @@ export function RecordingPlayer({
 
       setIsBuffering(true);
       setHasError(false);
+      setErrorMsg("");
+
+      // Start stall timer — if audio doesn't play within timeout, show error
+      startStallTimer();
 
       const playPromise = audio.play();
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
+            clearStallTimer();
             setIsPlaying(true);
             setIsBuffering(false);
             setHasError(false);
           })
           .catch((err) => {
+            clearStallTimer();
             console.warn("audio.play() rejected:", err);
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setHasError(true);
+            const msg = err?.message || "";
+            triggerError(msg.includes("user") ? "Click required to play" : "Failed to load recording");
           });
       }
     }
@@ -156,28 +199,31 @@ export function RecordingPlayer({
     e.preventDefault();
     e.stopPropagation();
     setHasError(false);
+    setErrorMsg("");
     setIsBuffering(true);
     setCacheBuster(Date.now());
 
     setTimeout(() => {
       if (audioRef.current) {
         audioRef.current.load();
+        startStallTimer();
         const playPromise = audioRef.current.play();
         if (playPromise !== undefined) {
           playPromise
             .then(() => {
+              clearStallTimer();
               setIsPlaying(true);
               setIsBuffering(false);
               setHasError(false);
             })
-            .catch(() => {
-              setIsBuffering(false);
-              setIsPlaying(false);
-              setHasError(true);
+            .catch((err) => {
+              clearStallTimer();
+              console.warn("Retry play rejected:", err);
+              triggerError("Retry failed — recording unavailable");
             });
         }
       }
-    }, 150);
+    }, 200);
   };
 
   const currentDuration = mediaDuration > 0 ? mediaDuration : (durationSeconds > 0 ? durationSeconds : 0);
@@ -192,20 +238,26 @@ export function RecordingPlayer({
           src={proxyUrl}
           preload="none"
           onPlay={() => {
+            clearStallTimer();
             setIsPlaying(true);
             setIsBuffering(false);
             setHasError(false);
           }}
           onPause={() => {
+            clearStallTimer();
             setIsPlaying(false);
             setIsBuffering(false);
           }}
           onPlaying={() => {
+            clearStallTimer();
             setIsPlaying(true);
             setIsBuffering(false);
             setHasError(false);
           }}
-          onWaiting={() => setIsBuffering(true)}
+          onWaiting={() => {
+            setIsBuffering(true);
+            startStallTimer();
+          }}
           onCanPlay={() => {
             setIsBuffering(false);
             setHasError(false);
@@ -224,15 +276,30 @@ export function RecordingPlayer({
             }
           }}
           onEnded={() => {
+            clearStallTimer();
             setIsPlaying(false);
             setIsBuffering(false);
             setProgress(0);
           }}
+          onStalled={() => {
+            console.warn("[RecordingPlayer] Audio stalled");
+            startStallTimer();
+          }}
+          onSuspend={() => {
+            if (isBuffering) startStallTimer();
+          }}
           onError={(e) => {
-            console.error("DOM audio error encountered:", e);
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setHasError(true);
+            const audio = e.currentTarget;
+            const code = audio.error?.code;
+            const errMessages: Record<number, string> = {
+              1: "Playback aborted",
+              2: "Network error — check connection",
+              3: "Decoding failed — unsupported format",
+              4: "Recording not found or unavailable",
+            };
+            const msg = (code && errMessages[code]) || "Recording unavailable";
+            console.error("[RecordingPlayer] DOM audio error:", audio.error);
+            triggerError(msg);
           }}
           style={{ display: "none" }}
         />
@@ -353,16 +420,21 @@ export function RecordingPlayer({
           </div>
 
           {hasError ? (
-            <Button
-              variant="outline"
-              size="sm"
-              type="button"
-              className="w-full text-amber-500 border-amber-500/30 hover:bg-amber-500/10 cursor-pointer"
-              onClick={handleRetry}
-            >
-              <RotateCw className="size-4 mr-1.5" />
-              Retry Playback
-            </Button>
+            <div className="space-y-1">
+              {errorMsg && (
+                <p className="text-[10px] text-amber-400/80 text-center">{errorMsg}</p>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                className="w-full text-amber-500 border-amber-500/30 hover:bg-amber-500/10 cursor-pointer"
+                onClick={handleRetry}
+              >
+                <RotateCw className="size-4 mr-1.5" />
+                Retry Playback
+              </Button>
+            </div>
           ) : (
             <Button
               variant={isPlaying ? "secondary" : "default"}

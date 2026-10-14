@@ -83,11 +83,23 @@ export async function GET(req: NextRequest) {
         globalAudioCache.delete(fetchUrl);
       }
 
+      // Build request headers — add Bonvoice auth token when the URL is from the Bonvoice server
+      const upstreamHeaders: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        Accept: "audio/*,video/*,*/*",
+      };
+
+      // Inject Bonvoice auth token for recordings hosted on the PBX server
+      const bonvoiceToken = process.env.BONVOICE_TOKEN;
+      if (
+        bonvoiceToken &&
+        (fetchUrl.includes("bonvoice.com") || fetchUrl.includes("pbx.bonvoice") || fetchUrl.includes("backend.pbx"))
+      ) {
+        upstreamHeaders["Authorization"] = `Token ${bonvoiceToken}`;
+      }
+
       const upstream = await fetch(fetchUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-          Accept: "audio/*,video/*,*/*",
-        },
+        headers: upstreamHeaders,
         redirect: "follow",
         signal: AbortSignal.timeout(30000),
       });
@@ -111,7 +123,25 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      const rawContentType = upstream.headers.get("content-type");
+      const rawContentType = upstream.headers.get("content-type") || "";
+
+      // Detect if upstream returned an HTML error/login page instead of audio (e.g., auth failure)
+      const isHtmlResponse = rawContentType.toLowerCase().includes("text/html") ||
+        (buffer.length >= 5 && buffer[0] === 0x3c && (
+          // <!DOC or <html
+          (buffer[1] === 0x21 || buffer[1] === 0x68 || buffer[1] === 0x48)
+        ));
+      if (isHtmlResponse) {
+        console.error(`[AudioProxy] Upstream returned HTML instead of audio for: ${fetchUrl}`);
+        return new NextResponse("Upstream returned HTML instead of audio (auth failure?)", {
+          status: 502,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+
       const contentType = detectAudioMimeType(buffer, rawContentType);
 
       if (globalAudioCache.size >= MAX_CACHE_ITEMS) {
