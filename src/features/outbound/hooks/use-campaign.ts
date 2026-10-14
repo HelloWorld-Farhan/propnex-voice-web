@@ -182,7 +182,6 @@ export function useCampaign(initialState: Campaign = outboundCampaignInitial, ov
         }
 
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.propnexai.com";
-        const pnxToken = localStorage.getItem("accessToken") || localStorage.getItem("access_token") || "";
 
         // First, fetch initial state via HTTP
         const query = `?companyId=${companyId}`;
