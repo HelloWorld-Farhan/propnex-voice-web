@@ -1312,6 +1312,20 @@ export function CampaignCard({
                                 const pending = Math.max(0, total - succeeded - failed - ringingNow);
 
                                 if (isPendingWave) {
+                                  if (total === 0) {
+                                    return (
+                                      <div className="flex items-center gap-1.5 text-xs text-amber-500 font-medium">
+                                        <Clock className="size-3.5" />
+                                        <span>
+                                          {wave.stage === "Q2"
+                                            ? "Calculates after 2:30 PM cutoff"
+                                            : wave.stage === "Q3"
+                                            ? "Calculates after 7:30 PM cutoff"
+                                            : "Pending"}
+                                        </span>
+                                      </div>
+                                    );
+                                  }
                                   return (
                                     <div className="flex items-center gap-3 text-xs font-medium flex-wrap">
                                       <span className="flex items-center gap-1.5">
@@ -1354,9 +1368,20 @@ export function CampaignCard({
                             {/* Wave Leads List */}
                             <div className="flex-1 overflow-y-auto p-2">
                               {ringingLeads.length === 0 && paginatedLeads.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 p-6 text-center">
-                                  <ListChecks className="size-8 mb-2 opacity-20" />
-                                  <span className="text-sm">No leads found.</span>
+                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
+                                  <ListChecks className="size-8 mb-2 opacity-30 text-amber-500/70" />
+                                  <span className="text-sm font-semibold text-foreground/80">
+                                    {wave.stage === "Q2" && (wave.data.status === "Pending" || wave.data.status === "Scheduled")
+                                      ? "Calculates after 2:30 PM cutoff"
+                                      : wave.stage === "Q3" && (wave.data.status === "Pending" || wave.data.status === "Scheduled")
+                                      ? "Calculates after 7:30 PM cutoff"
+                                      : "No leads found."}
+                                  </span>
+                                  {(wave.stage === "Q2" || wave.stage === "Q3") && (wave.data.status === "Pending" || wave.data.status === "Scheduled") && (
+                                    <span className="text-xs text-muted-foreground/80 mt-1 max-w-xs">
+                                      Non-completed leads from previous wave will roll over here.
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="space-y-1.5 pb-2">

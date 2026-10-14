@@ -261,15 +261,34 @@ export async function POST(req: Request) {
         }
 
         let lead: any = null;
-        // Only link leads automatically for INBOUND calls. Outbound calls initiated outside the platform (e.g. Postman)
-        // should NOT auto-link leads by phone number match so they remain classified as INTERNAL calls.
-        if (isInbound && callerCore && targetPhoneNumber.companyId) {
+        if (callerCore && targetPhoneNumber.companyId) {
           lead = await prisma.lead.findFirst({
             where: {
               companyId: targetPhoneNumber.companyId,
               phone:     { contains: callerCore },
             },
           });
+          if (!lead && callerNumber) {
+            try {
+              let stage = await prisma.leadPipelineStage.findFirst({ where: { companyId: targetPhoneNumber.companyId } });
+              if (!stage) {
+                stage = await prisma.leadPipelineStage.create({
+                  data: { companyId: targetPhoneNumber.companyId, name: "New", slug: "new", order: 1 }
+                });
+              }
+              lead = await prisma.lead.create({
+                data: {
+                  companyId: targetPhoneNumber.companyId,
+                  phone: callerNumber.startsWith("+") ? callerNumber : `+91${callerNumber.replace(/\D/g, "").slice(-10)}`,
+                  firstName: isInbound ? "Incoming" : "Internal",
+                  lastName: isInbound ? "Caller" : "Call",
+                  stageId: stage.id,
+                }
+              });
+            } catch (errLead) {
+              console.warn("Could not auto-create lead in notification:", errLead);
+            }
+          }
         }
 
         let parsedStartTime = new Date();

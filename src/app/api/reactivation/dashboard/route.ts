@@ -74,6 +74,8 @@ export async function GET(req: NextRequest) {
       },
       select: {
         id: true,
+        callLogId: true,
+        publicId: true,
         startedAt: true,
         leadId: true,
         campaignId: true,
@@ -166,7 +168,15 @@ export async function GET(req: NextRequest) {
         seenPhones.clear();
       }
 
-      const leadPhone = call.lead?.phone;
+      const wh: any = (call as any).providerWebhook || {};
+      const fallbackPhone =
+        wh.DestinationNumber ||
+        wh.callingNo ||
+        wh.dstNum ||
+        wh.destination ||
+        (call.providerCallId && call.providerCallId.includes("-") ? call.providerCallId.split("-")[2] : "");
+      const rawPhone = call.lead?.phone || fallbackPhone || "";
+      const leadPhone = rawPhone ? (rawPhone.startsWith("+") ? rawPhone : `+91${rawPhone.replace(/\D/g, "").slice(-10)}`) : null;
       if (!leadPhone) continue;
       const corePhone = leadPhone.replace(/\D/g, "").slice(-10);
       if (corePhone.length < 10) continue;
@@ -235,18 +245,28 @@ export async function GET(req: NextRequest) {
         }
 
         // Determine original call type generically for all companies:
-        // Campaign: has campaignId OR correlationId starts with 'camp-' OR is Bonvoice OBD (leadId + no OUT-prefix providerCallId)
-        // Lead: has leadId but no campaignId and no camp- correlationId (manual lead call)
-        // Internal: everything else (manual dial without lead or campaign)
-        const wh: any = (call as any).providerWebhook || {};
+        // - Campaign: has campaignId OR correlationId starts with 'camp-' OR Bonvoice OBD
+        // - Internal: callLogId starts with 'CL' without campaign/reactivation, or publicId starts with 'bonvoice-', or no leadId
+        // - Lead: manual direct call placed to a known lead
         const pCId = (call as any).providerCallId || "";
-        const isBonvoiceOBD = wh.callType === "2" && call.leadId && !pCId.startsWith("OUT-") && !pCId.startsWith("pending-");
-        const originalCallType =
-          call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-")) || isBonvoiceOBD
-            ? "Campaign"
-            : call.leadId && !call.campaignId
-              ? "Lead"
-              : "Internal";
+        const pubId = (call as any).publicId || "";
+        const cLogId = (call as any).callLogId || "";
+
+        const isInternal =
+          Boolean(pubId.startsWith("bonvoice-")) ||
+          Boolean(cLogId.startsWith("CL") && !call.campaignId && !call.correlationId) ||
+          Boolean(!call.leadId && !call.campaignId && !call.correlationId);
+
+        const isCampaign =
+          Boolean(call.campaignId) ||
+          Boolean(call.correlationId && call.correlationId.startsWith("camp-")) ||
+          Boolean(wh.callType === "2" && call.leadId && !pCId.startsWith("OUT-") && !pCId.startsWith("pending-") && !isInternal);
+
+        const originalCallType = isCampaign
+          ? "Campaign"
+          : isInternal
+            ? "Internal"
+            : "Lead";
 
         const numStillActive2 = call.phoneNumber !== null;
         const didToShow2 = numStillActive2 ? call.phoneNumber!.number : fallbackNumber;
@@ -344,6 +364,11 @@ export async function GET(req: NextRequest) {
         b.q1.status = "Running";
       }
 
+      // STRICT TIMING: Wave 2 ONLY calculates AFTER 2:30 PM cutoff (or past day, or Wave 1 Completed)
+      const canRolloverToQ2 = isPastDay || isPastQ1Cutoff || b.q1.status === "Completed";
+      // STRICT TIMING: Wave 3 ONLY calculates AFTER 7:30 PM cutoff (or past day, or Wave 2 Completed)
+      const canRolloverToQ3 = isPastDay || isPastQ2Cutoff || b.q2.status === "Completed";
+
       // Fast set of attempted phones for Wave 2
       const q2AttemptedPhones = new Set(
         q2Logs.map(l => l.lead?.phone?.replace(/\D/g, "").slice(-10)).filter(Boolean)
@@ -405,7 +430,7 @@ export async function GET(req: NextRequest) {
         q1FinalList.push(leadQ1Data);
 
         // ── Rollover to Wave 2: All leads that did not succeed in Wave 1 ──
-        if (!completedInQ1 && (failedInQ1 || b.q1.status === "Completed" || hasQ1Attempted || nowMs >= b.q1Time.getTime())) {
+        if (!completedInQ1 && canRolloverToQ2) {
           const q2LogStatus = (q2Log?.status || "").toUpperCase();
           const completedInQ2 = q2LogStatus === "COMPLETED" && (q2Log?.durationSeconds || 0) > 0;
           const q2LogAgeMs = q2Log?.startedAt ? (nowMs - new Date(q2Log.startedAt).getTime()) : 0;
@@ -431,7 +456,7 @@ export async function GET(req: NextRequest) {
           q2FinalList.push(leadQ2Data);
 
           // ── Rollover to Wave 3: All leads that did not succeed in Wave 2 ──
-          if (!completedInQ2 && (failedInQ2 || isPastQ2Cutoff || hasQ2Attempted || nowMs >= b.q1Time.getTime())) {
+          if (!completedInQ2 && canRolloverToQ3) {
             const q3LogStatus = (q3Log?.status || "").toUpperCase();
             const completedInQ3 = q3LogStatus === "COMPLETED" && (q3Log?.durationSeconds || 0) > 0;
             const q3LogAgeMs = q3Log?.startedAt ? (nowMs - new Date(q3Log.startedAt).getTime()) : 0;
@@ -460,33 +485,41 @@ export async function GET(req: NextRequest) {
       }
 
       // Wave 2 Status Evaluation (3:00 PM IST scheduled, 7:30 PM IST cutoff)
-      const allQ2Attempted = q2FinalList.length > 0 && q2FinalList.every((fl: any) => {
-        const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
-        return q2AttemptedPhones.has(core) || q2Logs.some(l => l.leadId === fl.id);
-      });
-      const q2Finished = isPastQ2Cutoff || (allQ2Attempted && !q2Running);
-
-      if (q2Finished) {
-        b.q2.status = "Completed";
-      } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
+      if (!canRolloverToQ2) {
         b.q2.status = "Pending";
       } else {
-        b.q2.status = "Running";
+        const allQ2Attempted = q2FinalList.length > 0 && q2FinalList.every((fl: any) => {
+          const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
+          return q2AttemptedPhones.has(core) || q2Logs.some(l => l.leadId === fl.id);
+        });
+        const q2Finished = isPastQ2Cutoff || (allQ2Attempted && !q2Running);
+
+        if (q2Finished) {
+          b.q2.status = "Completed";
+        } else if (nowMs < b.q2Time.getTime() && !hasQ2Attempted) {
+          b.q2.status = "Pending";
+        } else {
+          b.q2.status = "Running";
+        }
       }
 
       // Wave 3 Status Evaluation (8:00 PM IST scheduled, 11:45 PM IST cutoff)
-      const allQ3Attempted = q3FinalList.length > 0 && q3FinalList.every((fl: any) => {
-        const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
-        return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
-      });
-      const q3Finished = isPastQ3Cutoff || (allQ3Attempted && !q3Running);
-
-      if (q3Finished) {
-        b.q3.status = "Completed";
-      } else if (nowMs < b.q3Time.getTime() && !hasQ3Attempted) {
+      if (!canRolloverToQ3) {
         b.q3.status = "Pending";
       } else {
-        b.q3.status = "Running";
+        const allQ3Attempted = q3FinalList.length > 0 && q3FinalList.every((fl: any) => {
+          const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
+          return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
+        });
+        const q3Finished = isPastQ3Cutoff || (allQ3Attempted && !q3Running);
+
+        if (q3Finished) {
+          b.q3.status = "Completed";
+        } else if (nowMs < b.q3Time.getTime() && !hasQ3Attempted) {
+          b.q3.status = "Pending";
+        } else {
+          b.q3.status = "Running";
+        }
       }
 
       // Check if all leads are completed in Wave 1
@@ -563,11 +596,11 @@ export async function GET(req: NextRequest) {
       b.q2.failedLeads = sortWave(q2FinalList);
       b.q3.failedLeads = sortWave(q3FinalList);
 
-      // Auto-complete wave if 0 failed leads rolled over from earlier wave
-      if (b.q1.status === "Completed" && q2FinalList.length === 0) {
+      // Auto-complete wave if 0 failed leads rolled over from earlier wave (ONLY after cutoff arrived and canRollover is true)
+      if (canRolloverToQ2 && b.q1.status === "Completed" && q2FinalList.length === 0) {
         b.q2.status = "Completed";
       }
-      if (b.q2.status === "Completed" && q3FinalList.length === 0) {
+      if (canRolloverToQ3 && b.q2.status === "Completed" && q3FinalList.length === 0) {
         b.q3.status = "Completed";
       }
 

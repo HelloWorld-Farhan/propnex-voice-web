@@ -250,10 +250,31 @@ export async function POST(req: Request) {
 
       for (const log of existingLogs) {
         let lead: any = null;
-        if (isInbound && !log.leadId && callerCore && log.companyId) {
+        if (!log.leadId && callerCore && log.companyId) {
           lead = await prisma.lead.findFirst({
             where: { companyId: log.companyId, phone: { contains: callerCore } }
           });
+          if (!lead && callerNumber) {
+            try {
+              let stage = await prisma.leadPipelineStage.findFirst({ where: { companyId: log.companyId } });
+              if (!stage) {
+                stage = await prisma.leadPipelineStage.create({
+                  data: { companyId: log.companyId, name: "New", slug: "new", order: 1 }
+                });
+              }
+              lead = await prisma.lead.create({
+                data: {
+                  companyId: log.companyId,
+                  phone: callerNumber.startsWith("+") ? callerNumber : `+91${callerNumber.replace(/\D/g, "").slice(-10)}`,
+                  firstName: isInbound ? "Incoming" : "Internal",
+                  lastName: isInbound ? "Caller" : "Call",
+                  stageId: stage.id,
+                }
+              });
+            } catch (errLead) {
+              console.warn("Could not auto-create lead in hangup:", errLead);
+            }
+          }
         }
 
         const isPrimary = log.id === primaryLog?.id;
@@ -351,10 +372,31 @@ export async function POST(req: Request) {
         }
 
         let lead: any = null;
-        if (isInbound && callerCore && targetPhoneNumber.companyId) {
+        if (callerCore && targetPhoneNumber.companyId) {
           lead = await prisma.lead.findFirst({
             where: { companyId: targetPhoneNumber.companyId, phone: { contains: callerCore } },
           });
+          if (!lead && callerNumber) {
+            try {
+              let stage = await prisma.leadPipelineStage.findFirst({ where: { companyId: targetPhoneNumber.companyId } });
+              if (!stage) {
+                stage = await prisma.leadPipelineStage.create({
+                  data: { companyId: targetPhoneNumber.companyId, name: "New", slug: "new", order: 1 }
+                });
+              }
+              lead = await prisma.lead.create({
+                data: {
+                  companyId: targetPhoneNumber.companyId,
+                  phone: callerNumber.startsWith("+") ? callerNumber : `+91${callerNumber.replace(/\D/g, "").slice(-10)}`,
+                  firstName: isInbound ? "Incoming" : "Internal",
+                  lastName: isInbound ? "Caller" : "Call",
+                  stageId: stage.id,
+                }
+              });
+            } catch (errLead) {
+              console.warn("Could not auto-create lead in hangup (new log):", errLead);
+            }
+          }
         }
 
         const newLog = await prisma.callLog.create({
