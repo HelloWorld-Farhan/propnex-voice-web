@@ -1396,36 +1396,55 @@ export function CampaignCard({
                                   {ringingLeads.map((lead: any, rIdx: number) => (
                                     <div 
                                       key={`ringing-${rIdx}`} 
-                                      className="flex flex-col gap-1.5 text-xs border-2 border-sky-400 bg-sky-500/15 pb-3 pt-3 px-3.5 rounded-xl shadow-[0_0_20px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/40 animate-pulse relative overflow-hidden mb-2"
+                                      className="flex flex-col gap-2 text-xs border-2 border-sky-400/90 bg-gradient-to-b from-sky-950/50 via-sky-900/30 to-sky-950/40 p-3 rounded-xl shadow-[0_0_25px_rgba(56,189,248,0.35)] ring-1 ring-sky-400/50 relative overflow-hidden mb-2.5 transition-all"
                                     >
-                                      <div className="flex items-start justify-between w-full gap-2">
-                                        <div className="flex items-start gap-2.5 flex-1">
-                                          <div className="mt-1 shrink-0">
-                                            <PhoneOutgoing className="size-4 text-sky-400 animate-bounce" />
-                                          </div>
-                                          <div className="flex flex-col gap-0.5">
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-[10px] uppercase font-bold text-sky-300 tracking-wider">
-                                                RINGING NOW (ACTIVE CALL)
-                                              </span>
-                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-sky-500/30 text-white border border-sky-400 animate-pulse">
-                                                LIVE
-                                              </span>
-                                            </div>
-                                            <span className="font-extrabold text-[14px] text-white tracking-wide break-all drop-shadow-md">
-                                              {lead.phone}
-                                            </span>
-                                          </div>
+                                      {/* Top animated accent bar */}
+                                      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-sky-400 via-emerald-400 to-sky-400 animate-pulse" />
+
+                                      {/* Header: Title + Live Badge */}
+                                      <div className="flex items-center justify-between w-full">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="relative flex size-2 shrink-0">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />
+                                            <span className="relative inline-flex rounded-full size-2 bg-sky-500" />
+                                          </span>
+                                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-sky-300 truncate">
+                                            Ringing Now
+                                          </span>
                                         </div>
-                                        <div className="flex items-center gap-1 bg-sky-500/30 text-sky-200 border border-sky-400/40 px-2 py-0.5 rounded-full text-[10px] font-bold">
-                                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1"></span>
-                                          Ringing
+
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-sky-500/25 text-sky-200 border border-sky-400/50 shadow-sm animate-pulse">
+                                            <span className="size-1.5 rounded-full bg-emerald-400 inline-block animate-ping" />
+                                            LIVE CALL
+                                          </span>
                                         </div>
                                       </div>
-                                      <div className="flex flex-col items-center justify-center w-full mt-1.5 text-xs font-semibold py-2 px-3 rounded-lg border border-sky-500/40 bg-sky-500/20 text-sky-100 text-center shadow-inner">
-                                        <span>
-                                          📞 Calling Now... Name - {lead.name || "Unknown"}, DID Number - {lead.didNumber !== "Unknown" ? lead.didNumber : (activeHist.didNumber || "Unknown")}, Ch - {lead.channels || activeHist.channels || 1}
+
+                                      {/* Phone Number Display */}
+                                      <div className="flex items-center justify-between gap-2 py-0.5">
+                                        <span className="font-mono font-black text-[15px] text-white tracking-wide whitespace-nowrap drop-shadow-md">
+                                          {lead.phone}
                                         </span>
+                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-500/30 text-sky-200 border border-sky-400/30 shrink-0">
+                                          Ch {lead.channels || activeHist.channels || 1}
+                                        </span>
+                                      </div>
+
+                                      {/* Metadata box */}
+                                      <div className="flex flex-col gap-1 w-full text-[11px] font-medium py-1.5 px-2.5 rounded-lg border border-sky-500/30 bg-sky-500/15 text-sky-100/90 shadow-inner">
+                                        <div className="flex items-center justify-between gap-1">
+                                          <span className="text-muted-foreground/80 text-[10px] uppercase font-semibold">Contact:</span>
+                                          <span className="font-semibold text-white truncate text-right max-w-[150px]">
+                                            {lead.name || "Unknown"}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-1 pt-1 border-t border-sky-500/20 text-[10px]">
+                                          <span className="text-muted-foreground/80 uppercase font-semibold">Assigned DID:</span>
+                                          <span className="font-mono font-bold text-sky-300">
+                                            {lead.didNumber !== "Unknown" ? lead.didNumber : (activeHist.didNumber || "Unknown")}
+                                          </span>
+                                        </div>
                                       </div>
                                     </div>
                                   ))}
@@ -1438,7 +1457,7 @@ export function CampaignCard({
                                     <div 
                                       key={i} 
                                       className={cn(
-                                        "flex flex-col gap-1 text-xs border pb-2.5 pt-2.5 px-3 rounded-xl shadow-sm transition-colors",
+                                        "flex flex-col gap-1.5 text-xs border pb-2.5 pt-2 px-3 rounded-xl shadow-sm transition-colors",
                                         isRinging 
                                           ? "border-sky-500/60 bg-sky-500/10 shadow-[0_0_15px_rgba(56,189,248,0.25)] ring-1 ring-sky-500/40" 
                                           : lead.isCompleted 
@@ -1449,7 +1468,7 @@ export function CampaignCard({
                                       )}
                                     >
                                       <div className="flex items-start justify-between w-full gap-2">
-                                        <div className="flex items-start gap-2 flex-1">
+                                        <div className="flex items-start gap-2 flex-1 min-w-0">
                                           <div className="mt-0.5 shrink-0">
                                             {isRinging ? (
                                               <PhoneOutgoing className="size-4 text-sky-400 animate-bounce" />
@@ -1461,7 +1480,7 @@ export function CampaignCard({
                                               <Clock className="size-4 text-muted-foreground opacity-50" />
                                             )}
                                           </div>
-                                          <div className="flex flex-col gap-0.5">
+                                          <div className="flex flex-col gap-0.5 min-w-0">
                                             <div className="flex items-center gap-1.5">
                                               <span className={cn(
                                                 "text-[10px] uppercase tracking-wider",
@@ -1477,7 +1496,7 @@ export function CampaignCard({
                                               )}
                                             </div>
                                             <span className={cn(
-                                              "font-bold text-[13px] tracking-wide break-all",
+                                              "font-mono font-bold text-[13px] tracking-wide whitespace-nowrap",
                                               isRinging ? "text-sky-300 font-extrabold" : lead.isCompleted ? "text-emerald-600 dark:text-emerald-400" : isFailed ? "text-red-600 dark:text-red-400" : "text-foreground"
                                             )}>
                                               {lead.phone}
@@ -1486,18 +1505,23 @@ export function CampaignCard({
                                         </div>
                                       </div>
                                       <div className={cn(
-                                        "flex flex-col items-center justify-center w-full mt-2 text-xs font-medium py-2 px-3 rounded-lg border text-center",
+                                        "flex flex-col gap-0.5 w-full mt-1 text-[11px] font-medium py-1.5 px-2.5 rounded-lg border",
                                         isRinging 
-                                          ? "bg-sky-500/20 border-sky-500/40 text-sky-200 shadow-sm animate-pulse font-semibold" 
+                                          ? "bg-sky-500/20 border-sky-500/40 text-sky-200 shadow-sm font-semibold" 
                                           : lead.isCompleted 
                                           ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
                                           : isFailed 
                                           ? "bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400" 
                                           : "bg-muted/40 border-border/40 text-muted-foreground"
                                       )}>
-                                        <span>
-                                          {isRinging ? "📞 Calling Now... " : ""}Name - {lead.name || "Unknown"}, DID Number - {lead.didNumber !== "Unknown" ? lead.didNumber : "Unknown"}, Ch - {lead.channels || activeHist.channels || 1}
-                                        </span>
+                                        <div className="flex items-center justify-between gap-1">
+                                          <span className="text-[10px] opacity-75">Name:</span>
+                                          <span className="truncate max-w-[160px] text-right font-medium">{lead.name || "Unknown"}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-1 pt-0.5 border-t border-border/30 text-[10px]">
+                                          <span className="opacity-75">DID: {lead.didNumber !== "Unknown" ? lead.didNumber : (activeHist.didNumber || "Unknown")}</span>
+                                          <span className="font-semibold">Ch {lead.channels || activeHist.channels || 1}</span>
+                                        </div>
                                       </div>
                                     </div>
                                   )})}
