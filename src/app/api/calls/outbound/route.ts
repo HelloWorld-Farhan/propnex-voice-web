@@ -173,22 +173,18 @@ export async function GET(req: NextRequest) {
         whereClause.AND = andConditions;
       }
 
-      // Reactivation calls: only show them in the outbound table once they are
-      // fully finalized (COMPLETED with duration > 0).  While they are still live
-      // (RINGING, PENDING, IN-PROGRESS, etc.) or failed-with-0s they must NOT
-      // appear in the outbound dashboard — the reactivation dashboard handles those.
-      const LIVE_REACTIVATION_STATUSES = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING", "ANSWERED"];
+      // Reactivation calls: hide non-completed ones from the outbound table.
+      // All other calls (internal, lead, campaign) pass through unconditionally.
       if (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toUpperCase() === "COMPLETED") {
+        // NOT ( correlationId starts-with "reactivation-" AND (status!=COMPLETED OR duration==0) )
+        // = only reactivation calls that are fully finalized (COMPLETED + duration>0) are shown.
         whereClause.NOT = {
           AND: [
-            { correlationId: { isSet: true } },
             { correlationId: { startsWith: "reactivation-" } },
             {
-              // Exclude if the call is still live OR if it failed/completed with 0 duration
               OR: [
-                { status: { in: LIVE_REACTIVATION_STATUSES } },
                 { status: { not: "COMPLETED" } },
-                { durationSeconds: 0 }
+                { durationSeconds: 0 },
               ]
             }
           ]
@@ -203,17 +199,13 @@ export async function GET(req: NextRequest) {
       ? { durationSeconds: sortOrder }
       : { startedAt: sortOrder };
 
-    // Always fetch live (ringing/answered) outbound calls separately so they pin to the top.
-    // Exclude reactivation calls from the live list — they are tracked in their own dashboard.
+    // Live calls pinned at top — exclude live reactivation ones (they live in the reactivation dashboard).
     const shouldIncludeLive = !statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered";
     const liveOutboundWhere: any = {
       companyId: { in: companyIdsToQuery },
       direction: "OUTBOUND",
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
-      // Exclude live reactivation calls from the outbound dashboard
-      NOT: {
-        correlationId: { startsWith: "reactivation-" }
-      }
+      NOT: { correlationId: { startsWith: "reactivation-" } },
     };
 
     const [total, calls, liveCalls] = await Promise.all([
