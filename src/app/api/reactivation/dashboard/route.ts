@@ -67,11 +67,13 @@ export async function GET(req: NextRequest) {
     const fallbackNumber = activeFallbackPhone?.number || "Unknown";
     const fallbackChannels = activeFallbackPhone?.channels || 1;
 
-    // Fetch original failed/missed outbound calls (LEAN PROJECTION for blazing speed)
+    // Fetch original failed/missed outbound calls (LEAN PROJECTION for blazing speed, scoped to last 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const failedCalls = await prisma.callLog.findMany({
       where: {
         companyId: { in: companyIdsToQuery },
         direction: "OUTBOUND",
+        startedAt: { gte: thirtyDaysAgo },
         OR: [
           { status: { in: ["FAILED", "MISSED", "BUSY", "NO_ANSWER", "CANCELLED"] } },
           { durationSeconds: 0 },
@@ -116,11 +118,12 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Fetch reactivation CallLogs to track Q1/Q2/Q3 progress
+    // Fetch reactivation CallLogs to track Q1/Q2/Q3 progress (last 30 days)
     const reactivationLogs = await prisma.callLog.findMany({
       where: {
         companyId: { in: companyIdsToQuery },
         direction: "OUTBOUND",
+        startedAt: { gte: thirtyDaysAgo },
         correlationId: { startsWith: "reactivation-" }
       },
       select: {
@@ -425,12 +428,11 @@ export async function GET(req: NextRequest) {
       // 1. Midnight cutoff arrived (new day begins)
       // 2. All leads attempted AND no calls are actively ringing/running.
       // 3. OR more than 36h have passed since Q3 start time and it has been quiet for > 2 hours with no ringing calls.
-      const isQ3LongPast = nowMs > (b.q3Time.getTime() + 36 * 60 * 60 * 1000);
       const allQ3AttemptedPreliminary = b.q1.failedLeads.length > 0 && b.q1.failedLeads.every((fl: any) => {
         const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
         return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
       });
-      const q3FinishedPreliminary = isPastQ3Cutoff || (!q3Running && (allQ3AttemptedPreliminary || (isQ3LongPast && q3QuietMs > 2 * 60 * 60 * 1000)));
+      const q3FinishedPreliminary = isPastQ3Cutoff || (!q3Running && (allQ3AttemptedPreliminary || (hasQ3Attempted && q3QuietMs > 15 * 60 * 1000)));
 
       const q1FinalList: any[] = [];
       const q2FinalList: any[] = [];
@@ -556,7 +558,7 @@ export async function GET(req: NextRequest) {
           const core = (fl.phone || "").replace(/\D/g, "").slice(-10);
           return q3AttemptedPhones.has(core) || q3Logs.some(l => l.leadId === fl.id);
         });
-        const q3Finished = isPastQ3Cutoff || (!q3Running && (allQ3Attempted || (isQ3LongPast && q3QuietMs > 2 * 60 * 60 * 1000)));
+        const q3Finished = isPastQ3Cutoff || (!q3Running && (allQ3Attempted || (hasQ3Attempted && q3QuietMs > 15 * 60 * 1000)));
 
         if (q3Finished) {
           b.q3.status = "Completed";

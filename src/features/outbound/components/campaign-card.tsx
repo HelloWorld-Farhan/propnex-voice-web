@@ -267,7 +267,10 @@ export function CampaignCard({
         const cached = localStorage.getItem("cached_reactivation_campaigns");
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed[0].id;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const running = parsed.find((h: any) => h.q1?.status === "Running" || h.q2?.status === "Running" || h.q3?.status === "Running");
+            return running?.id || parsed[0].id;
+          }
         }
       } catch (e) {}
     }
@@ -315,7 +318,7 @@ export function CampaignCard({
       const anyRunning = (historicalCampaignsRef.current || []).some(
         (h: any) => h.q1?.status === "Running" || h.q2?.status === "Running" || h.q3?.status === "Running"
       );
-      const pollMs = (leadsModalOpen || anyRunning) ? 2500 : 10000;
+      const pollMs = (leadsModalOpen || anyRunning) ? 2500 : 4000;
 
       pollTimer = setTimeout(() => {
         fetchDashboard();
@@ -359,9 +362,15 @@ export function CampaignCard({
             try {
               localStorage.setItem("cached_reactivation_campaigns", JSON.stringify(json.data));
             } catch (e) {}
-            if (json.data.length > 0) {
-              setSelectedHistId(prev => prev || json.data[0].id);
-            }
+          }
+
+          if (json.data && json.data.length > 0) {
+            const running = json.data.find((h: any) => h.q1?.status === "Running" || h.q2?.status === "Running" || h.q3?.status === "Running");
+            setSelectedHistId(prev => {
+              if (running) return running.id;
+              if (prev && json.data.some((h: any) => h.id === prev)) return prev;
+              return json.data[0].id;
+            });
           }
 
           // Trigger animation for any wave that is completed but not yet shown
