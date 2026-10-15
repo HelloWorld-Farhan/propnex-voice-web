@@ -54,14 +54,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized: Company not found" }, { status: 401 });
     }
 
-    // 1. Immediately fail all active/ringing/pending outbound calls for this company in DB
+    // 1. Immediately fail all active/ringing/pending/answered outbound calls for this company in DB
     let modifiedCallsCount = 0;
     try {
       const updateResult = await (prisma as any).callLog.updateMany({
         where: {
           companyId: finalCompanyId,
           direction: "OUTBOUND",
-          status: { in: ["PENDING", "RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER"] }
+          status: { in: ["PENDING", "RINGING", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "ANSWERED"] }
         },
         data: {
           status: "FAILED",
@@ -73,6 +73,16 @@ export async function POST(req: NextRequest) {
       modifiedCallsCount = updateResult.count;
     } catch (dbErr) {
       console.error("[ForceStop Route] Database update error:", dbErr);
+    }
+
+    // Cancel all pending retry jobs for this company
+    try {
+      await (prisma as any).contactRetryJob.updateMany({
+        where: { companyId: finalCompanyId, status: "PENDING" },
+        data: { status: "CANCELLED", skipReason: "Campaign force stopped", updatedAt: new Date() }
+      });
+    } catch (rErr) {
+      console.error("[ForceStop Route] Retry jobs cancel error:", rErr);
     }
 
     // Invalidate dashboard cache immediately
