@@ -336,14 +336,18 @@ export async function GET(req: NextRequest) {
         customerNumber: formatDisplayNumber(custRaw),
         assignedNumber: formatDisplayNumber(assignRaw),
         callDateTime: call.startedAt.toISOString(),
-        duration: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
+        duration: (inboundDisplayStatus === "ringing" || (call.durationSeconds || 0) === 0)
+          ? "00s"
+          : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
         durationSeconds: call.durationSeconds || 0,
         status: inboundDisplayStatus,
         creditsUsed: call.creditsUsed || 0,
         recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],
-        liveStartedAt: (call.status === "RINGING" || call.status === "ANSWERED") ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
+        liveStartedAt: (call.status === "ANSWERED" || Boolean((call as any).answeredAt))
+          ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : (call.updatedAt || call.startedAt).toISOString())
+          : undefined,
       };
     });
 

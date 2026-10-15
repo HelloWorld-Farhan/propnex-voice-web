@@ -34,7 +34,8 @@ function LiveDuration({ startedAt }: { startedAt: string }) {
   useEffect(() => {
     const start = new Date(startedAt).getTime();
     const tick = () => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
+      // Clamp to 0 to completely prevent negative numbers from clock skew
+      setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -116,16 +117,21 @@ export function CallLogTable({
           <tbody className={cn("transition-opacity duration-150", isChangingPage && "opacity-70")}>
             <AnimatePresence mode="popLayout" initial={false}>
               {calls.map((call, index) => {
-                const isLive = call.status === "answered" || call.status === "in-progress" || call.status === "ringing";
+                const normStatus = (call.status || "").toLowerCase().trim();
+                const isLiveAnswered = (normStatus === "answered" || normStatus === "in-progress" || normStatus === "active") && Boolean(call.liveStartedAt);
+                const isRinging = normStatus === "ringing" || normStatus === "pending" || normStatus === "dispatching";
+                const isLive = isLiveAnswered || isRinging;
                 const realDurationSec = accurateDurations[call.id] ?? call.durationSeconds ?? 0;
                 const effMins = Math.floor(realDurationSec / 60);
                 const effSecs = realDurationSec % 60;
-                const formattedDuration = isLive && call.liveStartedAt ? (
-                  <LiveDuration startedAt={call.liveStartedAt} />
+                const formattedDuration = isLiveAnswered ? (
+                  <LiveDuration startedAt={call.liveStartedAt!} />
+                ) : isRinging ? (
+                  <span className="font-mono text-sm text-muted-foreground">00s</span>
                 ) : realDurationSec > 0 ? (
                   effMins > 0 ? `${effMins}m ${effSecs}s` : `${effSecs}s`
                 ) : (
-                  call.duration || "0s"
+                  <span className="font-mono text-sm text-muted-foreground">00s</span>
                 );
 
                 // 1.75 credits per 30-second block for outbound completed calls

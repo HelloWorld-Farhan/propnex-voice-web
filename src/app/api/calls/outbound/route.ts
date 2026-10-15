@@ -339,6 +339,11 @@ export async function GET(req: NextRequest) {
         effectiveDurationSec = 0;
       }
 
+      // If call is ringing, pending, or dispatching, talk duration is strictly 0
+      if (finalStatus === "ringing" || call.status === "RINGING" || call.status === "PENDING" || call.status === "DISPATCHING") {
+        effectiveDurationSec = 0;
+      }
+
       const effMinutes = Math.floor(effectiveDurationSec / 60);
       const effSeconds = effectiveDurationSec % 60;
 
@@ -348,20 +353,28 @@ export async function GET(req: NextRequest) {
         effectiveCredits = call.creditsUsed > 0 ? call.creditsUsed : calculateTelephonyCredits(effectiveDurationSec);
       }
 
+      // liveStartedAt must ONLY be set when call is ACTUALLY answered, never while still ringing!
+      const isCallAnswered = finalStatus === "answered" || call.status === "ANSWERED" || Boolean((call as any).answeredAt);
+      const liveStartedAt = isCallAnswered
+        ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : (call.updatedAt || call.startedAt).toISOString())
+        : undefined;
+
       return {
         id: call.id,
         callId: call.callLogId,
         customerNumber: cleanPhone(call.lead?.phone) || fallbackCustomerNumber || "",
         assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || fallbackAssignedNumber || fallbackCompanyDid || "",
         callDateTime: call.startedAt.toISOString(),
-        duration: effMinutes > 0 ? `${effMinutes}m ${effSeconds}s` : `${effSeconds}s`,
+        duration: (finalStatus === "ringing" || effectiveDurationSec === 0)
+          ? "00s"
+          : effMinutes > 0 ? `${effMinutes}m ${effSeconds}s` : `${effSeconds}s`,
         durationSeconds: effectiveDurationSec,
         status: finalStatus,
         creditsUsed: effectiveCredits,
         recordingUrl: call.recordingUrl || undefined,
         transcriptUrl: call.transcriptUrl || undefined,
         transcript: [],
-        liveStartedAt: isLive ? ((call as any).answeredAt ? (call as any).answeredAt.toISOString() : call.startedAt.toISOString()) : undefined,
+        liveStartedAt,
         callType,
       };
     }).filter((call) => {
