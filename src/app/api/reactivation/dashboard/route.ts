@@ -641,6 +641,24 @@ export async function GET(req: NextRequest) {
       b.q2.failedLeads = sortWave(q2FinalList);
       b.q3.failedLeads = sortWave(q3FinalList);
 
+      b.q1.totalContacts = q1FinalList.length;
+      b.q1.successfulCalls = q1FinalList.filter(l => l.isCompleted).length;
+      b.q1.failedCalls = q1FinalList.filter(l => l.isFailed).length;
+      b.q1.ringingCalls = q1FinalList.filter(l => l.isRinging).length;
+      b.q1.completedCalls = b.q1.successfulCalls + b.q1.failedCalls;
+
+      b.q2.totalContacts = q2FinalList.length;
+      b.q2.successfulCalls = q2FinalList.filter(l => l.isCompleted).length;
+      b.q2.failedCalls = q2FinalList.filter(l => l.isFailed).length;
+      b.q2.ringingCalls = q2FinalList.filter(l => l.isRinging).length;
+      b.q2.completedCalls = b.q2.successfulCalls + b.q2.failedCalls;
+
+      b.q3.totalContacts = q3FinalList.length;
+      b.q3.successfulCalls = q3FinalList.filter(l => l.isCompleted).length;
+      b.q3.failedCalls = q3FinalList.filter(l => l.isFailed).length;
+      b.q3.ringingCalls = q3FinalList.filter(l => l.isRinging).length;
+      b.q3.completedCalls = b.q3.successfulCalls + b.q3.failedCalls;
+
       // Auto-complete wave if 0 failed leads rolled over from earlier wave (ONLY after cutoff arrived and canRollover is true)
       if (canRolloverToQ2 && b.q1.status === "Completed" && q2FinalList.length === 0) {
         b.q2.status = "Completed";

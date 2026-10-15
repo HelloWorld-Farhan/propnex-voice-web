@@ -336,12 +336,22 @@ export function CampaignCard({
         const json = await res.json();
 
         if (isMounted && json.data) {
-          // Compare data signature to prevent unnecessary re-renders when data hasn't changed
+          // Compare data signature to ensure immediate UI re-render on any call status or count change
+          const LIVE_STATUS_CHECK = ["RINGING", "IN-PROGRESS", "DISPATCHING", "QUEUED_AT_PROVIDER", "ANSWERED"];
+          const getWaveSig = (w: any) => {
+            if (!w) return "none";
+            const leads = w.failedLeads || [];
+            const succ = leads.filter((l: any) => l.isCompleted).length;
+            const fail = leads.filter((l: any) => l.isFailed).length;
+            const ring = leads.filter((l: any) => l.isRinging || LIVE_STATUS_CHECK.includes((l.status || "").toUpperCase())).length;
+            const att = leads.filter((l: any) => l.isAttempted).length;
+            return `${w.status}_${succ}_${fail}_${ring}_${att}_${leads.length}`;
+          };
           const currentSig = (historicalCampaignsRef.current || [])
-            .map((b: any) => `${b.id}_${b.date}_${b.q1?.status}_${b.q1?.completedCalls}_${b.q2?.status}_${b.q2?.completedCalls}_${b.q3?.status}_${b.q3?.completedCalls}`)
+            .map((b: any) => `${b.id}_${getWaveSig(b.q1)}_${getWaveSig(b.q2)}_${getWaveSig(b.q3)}`)
             .join("|");
           const nextSig = (json.data || [])
-            .map((b: any) => `${b.id}_${b.date}_${b.q1?.status}_${b.q1?.completedCalls}_${b.q2?.status}_${b.q2?.completedCalls}_${b.q3?.status}_${b.q3?.completedCalls}`)
+            .map((b: any) => `${b.id}_${getWaveSig(b.q1)}_${getWaveSig(b.q2)}_${getWaveSig(b.q3)}`)
             .join("|");
 
           if (currentSig !== nextSig) {
