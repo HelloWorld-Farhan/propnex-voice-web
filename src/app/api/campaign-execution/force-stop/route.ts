@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-internal-secret": "propnex_internal_secret_2026",
             ...(authHeader ? { Authorization: authHeader } : {})
           },
           body: JSON.stringify({ companyId: finalCompanyId }),
