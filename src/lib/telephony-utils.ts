@@ -78,7 +78,11 @@ export function determineCallType(call: {
   correlationId?: string | null;
   callLogId?: string | null;
 }): "campaign" | "lead" | "internal" {
-  if (call.campaignId || (call.correlationId && call.correlationId.startsWith("camp-"))) {
+  if (
+    call.campaignId ||
+    (call.correlationId &&
+      (call.correlationId.startsWith("camp-") || call.correlationId.startsWith("campaign-")))
+  ) {
     return "campaign";
   }
   if (call.correlationId && call.correlationId.startsWith("reactivation-")) {

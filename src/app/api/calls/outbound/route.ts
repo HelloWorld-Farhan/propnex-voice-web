@@ -89,6 +89,7 @@ export async function GET(req: NextRequest) {
     const durationUnit = searchParams.get("durationUnit") || "sec";
     const search = searchParams.get("search");
     const statusParam = searchParams.get("status");
+    const callTypeParam = searchParams.get("callType")?.toLowerCase();
     const sortBy = searchParams.get("sortBy") || "date";
     const sortOrder = (searchParams.get("sortOrder") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
 
@@ -120,6 +121,37 @@ export async function GET(req: NextRequest) {
       }
 
       const andConditions: any[] = [];
+
+      if (callTypeParam && callTypeParam !== "all") {
+        if (callTypeParam === "campaign") {
+          andConditions.push({
+            OR: [
+              { campaignId: { not: null } },
+              { correlationId: { startsWith: "camp-" } },
+              { correlationId: { startsWith: "campaign-" } },
+            ],
+          });
+        } else if (callTypeParam === "lead") {
+          andConditions.push({
+            correlationId: { startsWith: "reactivation-" },
+          });
+        } else if (callTypeParam === "internal") {
+          andConditions.push({
+            campaignId: null,
+            OR: [
+              { correlationId: { isSet: false } },
+              { correlationId: null },
+              {
+                NOT: [
+                  { correlationId: { startsWith: "camp-" } },
+                  { correlationId: { startsWith: "campaign-" } },
+                  { correlationId: { startsWith: "reactivation-" } },
+                ],
+              },
+            ],
+          });
+        }
+      }
 
       if (assignedNumber) {
         const core = getCoreNumber(assignedNumber);
@@ -221,6 +253,47 @@ export async function GET(req: NextRequest) {
     // STRICT REQUIREMENT: Ringing / active calls must ONLY be prepended on Page 1.
     // On Page 2, 3, etc., live calls are not prepended, displaying pure historical page data.
     const shouldIncludeLive = page === 1 && (!statusParam || statusParam.toLowerCase() === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered");
+    const liveOutboundAndConditions: any[] = [
+      {
+        OR: [
+          { correlationId: { isSet: false } },
+          { correlationId: null },
+          { NOT: { correlationId: { startsWith: "reactivation-" } } },
+        ],
+      },
+    ];
+
+    if (callTypeParam && callTypeParam !== "all") {
+      if (callTypeParam === "campaign") {
+        liveOutboundAndConditions.push({
+          OR: [
+            { campaignId: { not: null } },
+            { correlationId: { startsWith: "camp-" } },
+            { correlationId: { startsWith: "campaign-" } },
+          ],
+        });
+      } else if (callTypeParam === "lead") {
+        liveOutboundAndConditions.push({
+          correlationId: { startsWith: "reactivation-" },
+        });
+      } else if (callTypeParam === "internal") {
+        liveOutboundAndConditions.push({
+          campaignId: null,
+          OR: [
+            { correlationId: { isSet: false } },
+            { correlationId: null },
+            {
+              NOT: [
+                { correlationId: { startsWith: "camp-" } },
+                { correlationId: { startsWith: "campaign-" } },
+                { correlationId: { startsWith: "reactivation-" } },
+              ],
+            },
+          ],
+        });
+      }
+    }
+
     const liveOutboundWhere: any = {
       direction: "OUTBOUND",
       OR: [
@@ -228,21 +301,14 @@ export async function GET(req: NextRequest) {
         ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
         ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
       ],
-      AND: [
-        {
-          OR: [
-            { correlationId: { isSet: false } },
-            { correlationId: null },
-            { NOT: { correlationId: { startsWith: "reactivation-" } } },
-          ],
-        },
-      ],
+      AND: liveOutboundAndConditions,
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
     };
 
     // Lightweight count cache for fast paginations without repeated countDocuments
     const hasFilters = Boolean(
       (statusParam && statusParam.toLowerCase() !== "all") ||
+      (callTypeParam && callTypeParam.toLowerCase() !== "all") ||
       assignedNumber || callerNumber || dateFrom || dateTo || minDuration || search || freshStartAfter
     );
 

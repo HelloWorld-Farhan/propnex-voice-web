@@ -744,6 +744,7 @@ export function CompanyCallsSection({
         onReset={resetFilters}
         searchId={`${companyId}-${direction}-search`}
         hideAssignedNumber={false}
+        showCallTypeFilter={direction === "outbound"}
         loading={loading}
       />
 

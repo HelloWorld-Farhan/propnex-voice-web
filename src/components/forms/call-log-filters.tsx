@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, memo } from "react";
+import { useState, useEffect, useRef, memo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   RotateCcw,
   Search,
@@ -10,16 +11,105 @@ import {
   User,
   Activity,
   SlidersHorizontal,
+  ChevronDown,
+  Layers,
+  Check,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   CALL_STATUS_OPTIONS,
+  CALL_TYPE_OPTIONS,
   DEFAULT_CALL_FILTERS,
   type CallLogFilters,
+  type CallTypeFilter,
 } from "@/types/call";
 import { cn } from "@/lib/utils";
+
+function CallTypeDropdown({
+  value,
+  onChange,
+}: {
+  value: CallTypeFilter;
+  onChange: (val: CallTypeFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    if (open) {
+      document.addEventListener("mousedown", handleOutsideClick);
+    }
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [open]);
+
+  const selected = CALL_TYPE_OPTIONS.find((opt) => opt.value === value) || CALL_TYPE_OPTIONS[0];
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className={cn(
+          "flex h-9.5 w-full items-center justify-between rounded-lg border border-input bg-card px-2.5 py-2 text-xs sm:text-sm text-foreground transition-all duration-150 hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          open && "border-primary ring-2 ring-primary/20"
+        )}
+      >
+        <div className="flex items-center gap-1.5 truncate">
+          <span className={cn("size-2 rounded-full shrink-0", selected.dotClass)} />
+          <span className={cn("truncate text-[11px] sm:text-xs", selected.colorClass)}>{selected.label}</span>
+        </div>
+        <ChevronDown
+          className={cn("size-3.5 text-muted-foreground transition-transform duration-200 shrink-0", open && "rotate-180 text-foreground")}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.96 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="absolute left-0 right-0 top-full z-40 mt-1.5 min-w-[140px] overflow-hidden rounded-xl border border-border/80 bg-popover/95 p-1 shadow-2xl backdrop-blur-xl"
+          >
+            {CALL_TYPE_OPTIONS.map((opt) => {
+              const isSelected = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors",
+                    isSelected
+                      ? "bg-primary/15 text-primary font-medium"
+                      : "text-foreground/90 hover:bg-white/5 hover:text-foreground"
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={cn("size-2 rounded-full", opt.dotClass)} />
+                    <span className={opt.colorClass}>{opt.label}</span>
+                  </div>
+                  {isSelected && <Check className="size-3.5 text-primary shrink-0" />}
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 type CallLogFiltersBarProps = {
   filters: CallLogFilters;
@@ -28,6 +118,7 @@ type CallLogFiltersBarProps = {
   searchId?: string;
   className?: string;
   hideAssignedNumber?: boolean;
+  showCallTypeFilter?: boolean;
   loading?: boolean;
 };
 
@@ -38,6 +129,7 @@ export const CallLogFiltersBar = memo(function CallLogFiltersBar({
   searchId = "call-log-search",
   className,
   hideAssignedNumber = false,
+  showCallTypeFilter = false,
   loading = false,
 }: CallLogFiltersBarProps) {
   const [localFilters, setLocalFilters] = useState<CallLogFilters>(filters);
@@ -48,6 +140,7 @@ export const CallLogFiltersBar = memo(function CallLogFiltersBar({
       const isSame =
         prev.search === filters.search &&
         prev.status === filters.status &&
+        prev.callType === filters.callType &&
         prev.dateFrom === filters.dateFrom &&
         prev.dateTo === filters.dateTo &&
         prev.assignedNumber === filters.assignedNumber &&
@@ -75,6 +168,7 @@ export const CallLogFiltersBar = memo(function CallLogFiltersBar({
   const activeCount = [
     Boolean(localFilters.search && localFilters.search !== DEFAULT_CALL_FILTERS.search),
     Boolean(localFilters.status && localFilters.status !== "all"),
+    Boolean(localFilters.callType && localFilters.callType !== "all"),
     Boolean(localFilters.dateFrom && localFilters.dateFrom !== DEFAULT_CALL_FILTERS.dateFrom),
     Boolean(localFilters.dateTo && localFilters.dateTo !== DEFAULT_CALL_FILTERS.dateTo),
     Boolean(localFilters.assignedNumber && localFilters.assignedNumber !== DEFAULT_CALL_FILTERS.assignedNumber),
@@ -85,6 +179,7 @@ export const CallLogFiltersBar = memo(function CallLogFiltersBar({
   const handleReset = () => {
     const clean: CallLogFilters = {
       ...DEFAULT_CALL_FILTERS,
+      callType: "all",
       sortBy: "date",
       sortOrder: "desc",
     };
@@ -204,31 +299,74 @@ export const CallLogFiltersBar = memo(function CallLogFiltersBar({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label
-              htmlFor={`${searchId}-status`}
-              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
-            >
-              <Activity className="size-3.5 text-muted-foreground/80" />
-              <span>Status</span>
-            </label>
-            <select
-              id={`${searchId}-status`}
-              value={localFilters.status}
-              onChange={(e) =>
-                updateImmediate({
-                  status: e.target.value as CallLogFilters["status"],
-                })
-              }
-              className="flex h-9.5 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground transition-colors [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {CALL_STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {showCallTypeFilter ? (
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="space-y-1.5 min-w-0">
+                <label
+                  htmlFor={`${searchId}-status`}
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground truncate"
+                >
+                  <Activity className="size-3.5 text-muted-foreground/80 shrink-0" />
+                  <span className="truncate">Status</span>
+                </label>
+                <select
+                  id={`${searchId}-status`}
+                  value={localFilters.status}
+                  onChange={(e) =>
+                    updateImmediate({
+                      status: e.target.value as CallLogFilters["status"],
+                    })
+                  }
+                  className="flex h-9.5 w-full rounded-lg border border-input bg-card px-2 py-2 text-xs sm:text-sm text-foreground transition-colors [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring truncate"
+                >
+                  {CALL_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5 min-w-0">
+                <label
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground truncate"
+                >
+                  <Layers className="size-3.5 text-muted-foreground/80 shrink-0" />
+                  <span className="truncate">Call Type</span>
+                </label>
+                <CallTypeDropdown
+                  value={localFilters.callType || "all"}
+                  onChange={(val) => updateImmediate({ callType: val })}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <label
+                htmlFor={`${searchId}-status`}
+                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+              >
+                <Activity className="size-3.5 text-muted-foreground/80" />
+                <span>Status</span>
+              </label>
+              <select
+                id={`${searchId}-status`}
+                value={localFilters.status}
+                onChange={(e) =>
+                  updateImmediate({
+                    status: e.target.value as CallLogFilters["status"],
+                  })
+                }
+                className="flex h-9.5 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground transition-colors [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {CALL_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Row 2: Date Range & Duration */}

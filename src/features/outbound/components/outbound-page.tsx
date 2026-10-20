@@ -663,6 +663,7 @@ export function OutboundPageContent() {
         onChange={updateFilters}
         onReset={resetFilters}
         searchId="outbound-search"
+        showCallTypeFilter={true}
         loading={loading}
       />
 

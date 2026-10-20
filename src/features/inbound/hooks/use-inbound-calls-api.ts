@@ -158,7 +158,7 @@ export function useInboundCallsApi(
   companyId?: string,
   direction?: "inbound" | "outbound"
 ): UseInboundCallsApiState {
-  const { search, status, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder } = filters;
+  const { search, status, callType, dateFrom, dateTo, assignedNumber, callerNumber, minDuration, durationUnit, sortBy, sortOrder } = filters;
   const cacheKey = `calls_cache_v5_${direction || "inbound"}_${companyId || "default"}_${page}_${JSON.stringify(filters)}`;
 
   const currentRequestIdRef = useRef(0);
@@ -213,6 +213,7 @@ export function useInboundCallsApi(
       try {
         const res: CallListApiResponse = await fetchInboundCalls({
           status: status !== "all" ? status : undefined,
+          callType: callType !== "all" ? callType : undefined,
           page: requestedPage,
           limit: PAGE_SIZE,
           companyId,

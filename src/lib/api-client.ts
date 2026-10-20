@@ -63,6 +63,7 @@ export type CallListParams = {
   durationUnit?: "sec" | "min";
   sortBy?: "date" | "duration";
   sortOrder?: "desc" | "asc";
+  callType?: string;
 };
 
 export async function fetchInboundCalls(
@@ -70,6 +71,7 @@ export async function fetchInboundCalls(
 ): Promise<CallListApiResponse> {
   const query = new URLSearchParams();
   if (params.status && params.status !== "all") query.set("status", params.status.toUpperCase());
+  if (params.callType && params.callType !== "all") query.set("callType", params.callType);
   if (params.phoneNumberId) query.set("phoneNumberId", params.phoneNumberId);
   if (params.provider) query.set("provider", params.provider);
   if (params.page) query.set("page", String(params.page));

@@ -26,9 +26,12 @@ export type CallRecord = {
   callType?: "lead" | "campaign" | "internal";
 };
 
+export type CallTypeFilter = "all" | "campaign" | "lead" | "internal";
+
 export type CallLogFilters = {
   search: string;
   status: CallStatus | "all";
+  callType?: CallTypeFilter;
   dateFrom: string;
   dateTo: string;
   assignedNumber: string;
@@ -42,6 +45,7 @@ export type CallLogFilters = {
 export const DEFAULT_CALL_FILTERS: CallLogFilters = {
   search: "",
   status: "all",
+  callType: "all",
   dateFrom: "",
   dateTo: "",
   assignedNumber: "",
@@ -59,3 +63,12 @@ export const CALL_STATUS_OPTIONS: { value: CallStatus | "all"; label: string }[]
     { value: "missed", label: "Missed" },
     { value: "failed", label: "Failed" },
   ];
+
+export const CALL_TYPE_OPTIONS: { value: CallTypeFilter; label: string; badge: string; colorClass: string; dotClass: string }[] =
+  [
+    { value: "all", label: "All Types", badge: "ALL", colorClass: "text-muted-foreground", dotClass: "bg-muted-foreground/60" },
+    { value: "campaign", label: "Campaign", badge: "CAMPAIGN", colorClass: "text-fuchsia-400 font-bold", dotClass: "bg-fuchsia-500" },
+    { value: "lead", label: "Lead", badge: "LEAD", colorClass: "text-emerald-400 font-bold", dotClass: "bg-emerald-500" },
+    { value: "internal", label: "Internal", badge: "INTERNAL", colorClass: "text-purple-400 font-bold", dotClass: "bg-purple-500" },
+  ];
+

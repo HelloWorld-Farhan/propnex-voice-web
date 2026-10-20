@@ -70,6 +70,7 @@ export function useOutboundCalls() {
       query.set("companyId", user.companyId);
 
       if (filters.status && filters.status !== "all") query.set("status", filters.status.toUpperCase());
+      if (filters.callType && filters.callType !== "all") query.set("callType", filters.callType);
       if (filters.assignedNumber) query.set("assignedNumber", filters.assignedNumber);
       if (filters.callerNumber) query.set("callerNumber", filters.callerNumber);
       if (filters.dateFrom) query.set("dateFrom", filters.dateFrom);
@@ -99,7 +100,7 @@ export function useOutboundCalls() {
       const newPages = data.meta?.totalPages || 1;
 
       // Cache primary page results in localStorage so subsequent opens render instantly
-      if (requestedPage === 1 && (!filters.status || filters.status === "all") && !filters.search && !filters.callerNumber && !filters.assignedNumber) {
+      if (requestedPage === 1 && (!filters.status || filters.status === "all") && (!filters.callType || filters.callType === "all") && !filters.search && !filters.callerNumber && !filters.assignedNumber) {
         try {
           localStorage.setItem("propnex_outbound_calls_cache", JSON.stringify(newCalls));
           localStorage.setItem("propnex_outbound_total_cache", newTotal.toString());
