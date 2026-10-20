@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Send, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 import { useUserContext } from "@/features/auth/context/user-context";
@@ -53,18 +54,6 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
     window.addEventListener("open-chatbot", handleOpen);
     return () => window.removeEventListener("open-chatbot", handleOpen);
   }, []);
-
-  // Lock body scroll when window mode is open to prevent background scrolling
-  useEffect(() => {
-    if (mode === "window" && isOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [isOpen, mode]);
 
   // Set personalized greeting once when user context loads
   useEffect(() => {
@@ -357,8 +346,7 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
         @keyframes dot-blink{0%,100%{opacity:1}50%{opacity:.3}}
         
         /*  BACKDROP  */
-        .chat-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);z-index:99998;opacity:0;pointer-events:none;transition:opacity .4s}
-        .chat-backdrop.show{opacity:1;pointer-events:auto}
+        .chat-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(4px);z-index:99998;touch-action:none;overscroll-behavior:contain;}
         
         /*  CHAT PANEL — Desktop  */
         .chat-window{
@@ -376,12 +364,11 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
           min-height:0;
           z-index:2147483647;
           box-shadow:0 0 0 1px rgba(255,255,255,.03),0 40px 80px rgba(0,0,0,.8),0 0 60px rgba(255,255,255,.02);
-          opacity:0;visibility:hidden;
-          transform:translateY(20px) scale(.95);
-          transform-origin:bottom left;
-          transition:visibility 0s linear .45s, opacity .45s cubic-bezier(.16,1,.3,1), transform .45s cubic-bezier(.16,1,.3,1);
           height:calc(100vh - 140px);
           max-height:560px;
+          pointer-events:auto !important;
+          user-select:auto !important;
+          -webkit-user-select:auto !important;
         }
         /* Mobile — bottom sheet, NOT full screen */
         @media (max-width: 639px) {
@@ -394,14 +381,7 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
             height: calc(100svh - 100px) !important;
             max-height: 600px !important;
             max-width: none !important;
-            transform-origin: bottom center;
             border-radius: 20px;
-          }
-          .chat-window.open {
-            transform: translateY(0) scale(1);
-          }
-          .chat-window:not(.open) {
-            transform: translateY(calc(100% + 100px)) scale(1);
           }
         }
         @media (min-width: 1024px) {
@@ -409,7 +389,6 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
             left: calc(var(--sidebar-width, 280px) + 24px);
           }
         }
-        .chat-window.open{opacity:1;visibility:visible;pointer-events:auto !important;user-select:auto !important;-webkit-user-select:auto !important;transform:translateY(0) scale(1);transition:visibility 0s linear 0s, opacity .45s cubic-bezier(.16,1,.3,1), transform .45s cubic-bezier(.16,1,.3,1);}
         
         .ch-head{
           position:relative;overflow:hidden;
@@ -580,86 +559,121 @@ export function SidebarChatbot({ mode = "window" }: { mode?: "fab" | "window" })
       )}
 
       {mode === "window" && mounted && (
-        <>
-          {/* BACKDROP */}
-          <div 
-            className={cn("chat-backdrop", isOpen && "show")} 
-            onPointerDown={() => setIsOpen(false)}
-          ></div>
+        <AnimatePresence>
+          {isOpen && (
+            <>
+              {/* BACKDROP */}
+              <motion.div 
+                key="chat-backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.22, ease: "easeInOut" }}
+                className="chat-backdrop" 
+                onPointerDown={() => setIsOpen(false)}
+                onWheel={(e) => e.preventDefault()}
+                onTouchMove={(e) => e.preventDefault()}
+              />
 
-          {/* CHAT PANEL */}
-          <div className={cn("chat-window", isOpen && "open")}>
-            <div className="ch-head">
-              <div className="ch-head-bg"></div>
-              <div className="ch-orb"></div>
-              <div className="ch-actions">
-                <div className="ch-btn" onClick={() => setIsOpen(false)}>
-                  <X className="size-[13px] text-zinc-400" />
+              {/* CHAT PANEL */}
+              <motion.div 
+                key="chat-window"
+                initial={{ opacity: 0, y: 24, scale: 0.94 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.94 }}
+                transition={{ type: "spring", damping: 26, stiffness: 360 }}
+                className="chat-window"
+              >
+                <div className="ch-head">
+                  <div className="ch-head-bg"></div>
+                  <div className="ch-orb"></div>
+                  <div className="ch-actions">
+                    <div className="ch-btn" onClick={() => setIsOpen(false)}>
+                      <X className="size-[13px] text-zinc-400" />
+                    </div>
+                  </div>
+                  <div className="ch-agent">
+                    <div className="ch-av-wrap">
+                      <div className="ch-av-ring2"></div>
+                      <div className="ch-av-ring"></div>
+                      <div className="ch-av">🤖</div>
+                    </div>
+                    <div className="ch-info">
+                      <h3>Task Desk</h3>
+                      <div className="ch-status"><div className="ch-dot"></div>Online & active</div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="ch-agent">
-                <div className="ch-av-wrap">
-                  <div className="ch-av-ring2"></div>
-                  <div className="ch-av-ring"></div>
-                  <div className="ch-av">🤖</div>
-                </div>
-                <div className="ch-info">
-                  <h3>Task Desk</h3>
-                  <div className="ch-status"><div className="ch-dot"></div>Online & active</div>
-                </div>
-              </div>
-            </div>
-            {/* Tags row — wraps on desktop, scrolls on mobile */}
-            {messages.length <= 1 && (
-              <div className="ch-tags-row">
-                <div className="ch-tags-inner">
-                  {getTags().map(tag => (
-                    <div key={tag} className="ch-tag" onClick={() => handleTagClick(tag)}>{tag}</div>
+                {/* Tags row — wraps on desktop, scrolls on mobile */}
+                {messages.length <= 1 && (
+                  <div className="ch-tags-row">
+                    <div className="ch-tags-inner">
+                      {getTags().map(tag => (
+                        <div key={tag} className="ch-tag" onClick={() => handleTagClick(tag)}>{tag}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="ch-msgs">
+                  {messages.map((msg) => (
+                    <motion.div 
+                      key={msg.id} 
+                      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                      className={cn("mrow", msg.type)}
+                    >
+                      {msg.type === "bot" && <div className="mav">🤖</div>}
+                      <div className={cn("mbub", msg.type)}>{msg.text.replace(/\*\*/g, '')}</div>
+                    </motion.div>
                   ))}
+                  
+                  <AnimatePresence>
+                    {isTyping && (
+                      <motion.div 
+                        key="typing-indicator"
+                        initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                        transition={{ duration: 0.16 }}
+                        className="type-row"
+                      >
+                        <div className="mav">🤖</div>
+                        <div className="type-bub show">
+                          <div className="td"></div><div className="td"></div><div className="td"></div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                  <div ref={msgsEndRef} />
                 </div>
-              </div>
-            )}
 
-            <div className="ch-msgs">
-              {messages.map((msg) => (
-                <div key={msg.id} className={cn("mrow", msg.type)}>
-                  {msg.type === "bot" && <div className="mav">🤖</div>}
-                  <div className={cn("mbub", msg.type)}>{msg.text.replace(/\*\*/g, '')}</div>
+                <div className="ch-inp-wrap">
+                  <form className="ch-inp" onClick={() => (textareaRef.current as any)?.focus()} onSubmit={(e) => { e.preventDefault(); handleSend(); }}>
+                    <input
+                      type="text"
+                      ref={textareaRef as any}
+                      className="ch-ta"
+                      placeholder="Message Task Desk..."
+                      value={inputValue}
+                      inputMode="text"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="sentences"
+                      enterKeyHint="send"
+                      onChange={(e) => setInputValue(e.target.value)}
+                    />
+                    <button type="submit" id="chat-send-btn" className="ch-send" disabled={isTyping || !inputValue.trim()}>
+                      <Send className="size-3.5 text-zinc-900" />
+                    </button>
+                  </form>
+                  <div className="ch-hint">Task Desk · Online &amp; active</div>
                 </div>
-              ))}
-              
-              <div className="type-row">
-                <div className="mav" style={{ opacity: isTyping ? 1 : 0, transition: 'opacity 0.2s' }}>🤖</div>
-                <div className={cn("type-bub", isTyping && "show")}>
-                  <div className="td"></div><div className="td"></div><div className="td"></div>
-                </div>
-              </div>
-              <div ref={msgsEndRef} />
-            </div>
-
-            <div className="ch-inp-wrap">
-              <form className="ch-inp" onClick={() => (textareaRef.current as any)?.focus()} onSubmit={(e) => { e.preventDefault(); handleSend(); }}>
-                <input
-                  type="text"
-                  ref={textareaRef as any}
-                  className="ch-ta"
-                  placeholder="Message Task Desk..."
-                  value={inputValue}
-                  inputMode="text"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="sentences"
-                  enterKeyHint="send"
-                  onChange={(e) => setInputValue(e.target.value)}
-                />
-                <button type="submit" id="chat-send-btn" className="ch-send" disabled={isTyping || !inputValue.trim()}>
-                  <Send className="size-3.5 text-zinc-900" />
-                </button>
-              </form>
-              <div className="ch-hint">Task Desk · Online &amp; active</div>
-            </div>
-          </div>
-        </>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       )}
     </>
   );
