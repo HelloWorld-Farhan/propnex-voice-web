@@ -137,7 +137,12 @@ export async function GET(req: NextRequest) {
           });
         } else if (callTypeParam === "internal") {
           andConditions.push({
-            campaignId: null,
+            OR: [
+              { campaignId: null },
+              { campaignId: { isSet: false } },
+            ],
+          });
+          andConditions.push({
             OR: [
               { correlationId: { isSet: false } },
               { correlationId: null },
@@ -278,7 +283,12 @@ export async function GET(req: NextRequest) {
         });
       } else if (callTypeParam === "internal") {
         liveOutboundAndConditions.push({
-          campaignId: null,
+          OR: [
+            { campaignId: null },
+            { campaignId: { isSet: false } },
+          ],
+        });
+        liveOutboundAndConditions.push({
           OR: [
             { correlationId: { isSet: false } },
             { correlationId: null },
@@ -381,8 +391,18 @@ export async function GET(req: NextRequest) {
 
       if ((!fallbackAssignedNumber || !fallbackCustomerNumber) && call.providerCallId && call.providerCallId.includes("-")) {
         const parts = call.providerCallId.split("-");
-        if (!fallbackAssignedNumber && parts.length >= 3) fallbackAssignedNumber = cleanPhone(parts[1]);
-        if (!fallbackCustomerNumber && parts.length >= 3) fallbackCustomerNumber = cleanPhone(parts[2]);
+        if (!fallbackAssignedNumber && parts.length >= 3) {
+          const candidateDid = cleanPhone(parts[1]);
+          if (getCoreNumber(candidateDid).length >= 7) fallbackAssignedNumber = candidateDid;
+        }
+        if (!fallbackCustomerNumber && parts.length >= 3) {
+          const candidateCust = cleanPhone(parts[2]);
+          if (getCoreNumber(candidateCust).length >= 7) fallbackCustomerNumber = candidateCust;
+        }
+      }
+
+      if (fallbackAssignedNumber && getCoreNumber(fallbackAssignedNumber).length < 7) {
+        fallbackAssignedNumber = "";
       }
 
       const fallbackCompanyDid = cleanPhone(companyPhoneNumbers[0]?.number);
@@ -435,8 +455,8 @@ export async function GET(req: NextRequest) {
       return {
         id: call.id,
         callId: call.callLogId,
-        customerNumber: cleanPhone(call.lead?.phone) || fallbackCustomerNumber || "",
-        assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || fallbackAssignedNumber || fallbackCompanyDid || "",
+        customerNumber: cleanPhone(call.lead?.phone) || (getCoreNumber(fallbackCustomerNumber).length >= 7 ? fallbackCustomerNumber : "") || "",
+        assignedNumber: cleanPhone(call.phoneNumber?.number) || cleanPhone(call.historicalDidString) || (getCoreNumber(fallbackAssignedNumber).length >= 7 ? fallbackAssignedNumber : "") || fallbackCompanyDid || "",
         callDateTime: call.startedAt.toISOString(),
         duration: (finalStatus === "ringing" || effectiveDurationSec === 0)
           ? "00s"
