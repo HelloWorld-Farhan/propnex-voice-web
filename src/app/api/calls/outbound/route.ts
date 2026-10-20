@@ -193,6 +193,7 @@ export async function GET(req: NextRequest) {
       // Failed, missed, or in-progress LEAD reactivation calls belong exclusively in the Lead Reactivation dashboard.
       andConditions.push({
         OR: [
+          { correlationId: { isSet: false } },
           { correlationId: null },
           { NOT: { correlationId: { startsWith: "reactivation-" } } },
           {
@@ -227,8 +228,14 @@ export async function GET(req: NextRequest) {
         ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
         ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
       ],
-      NOT: [
-        { correlationId: { startsWith: "reactivation-" } }
+      AND: [
+        {
+          OR: [
+            { correlationId: { isSet: false } },
+            { correlationId: null },
+            { NOT: { correlationId: { startsWith: "reactivation-" } } },
+          ],
+        },
       ],
       status: { in: ["RINGING", "ANSWERED", "DISPATCHING", "QUEUED", "QUEUED_AT_PROVIDER", "PENDING"] },
     };

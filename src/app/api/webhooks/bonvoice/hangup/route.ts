@@ -393,15 +393,19 @@ export async function POST(req: Request) {
         // ONLY apply this filter when direction is EXPLICITLY inbound \u2014 don't drop external
         // outbound calls (via Postman/API) that omit the Direction field.
         let filtered = candidates;
+        let isOutboundOnlyInbound = false;
         if (isInbound && isDirectionExplicit) {
-          filtered = candidates.filter(p => {
+          const strictlyInbound = candidates.filter(p => {
             const dir = (p.direction || "").toUpperCase();
             return dir === "INBOUND" || dir === "BOTH";
           });
 
-          if (filtered.length === 0) {
-            console.log(`Bonvoice Hangup: Inbound call received on OUTBOUND-only number (${didNumber}). Dropping company association (no credit deduction, no inbound count increase).`);
-            return NextResponse.json({ success: true, message: "Ignored inbound call on outbound-only number" });
+          if (strictlyInbound.length > 0) {
+            filtered = strictlyInbound;
+          } else {
+            isOutboundOnlyInbound = true;
+            filtered = candidates;
+            console.log(`Bonvoice Hangup: External/internal call on OUTBOUND-only number (${didNumber}). Recording as outbound internal call.`);
           }
         }
 
@@ -451,16 +455,18 @@ export async function POST(req: Request) {
           }
         }
 
+        const effectiveDirection = (isInbound && !isOutboundOnlyInbound) ? "INBOUND" : "OUTBOUND";
+
         const newLog = await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
             publicId:        `bonvoice-${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
-            direction:       isInbound ? "INBOUND" : "OUTBOUND",
+            direction:       effectiveDirection,
             status:          finalMappedStatus as any,
             companyId:       targetPhoneNumber.companyId ?? undefined,
             phoneNumberId:   targetPhoneNumber.id,
             leadId:          lead?.id ?? undefined,
-            aiAgentId:       isInbound ? (targetPhoneNumber.inboundAgentId ?? undefined) : (targetPhoneNumber.outboundAgentId ?? undefined),
+            aiAgentId:       effectiveDirection === "INBOUND" ? (targetPhoneNumber.inboundAgentId ?? undefined) : (targetPhoneNumber.outboundAgentId ?? undefined),
             providerCallId:  callID ? String(callID) : undefined,
             startedAt:       startTimeParsed,
             endedAt:         endTimeParsed,

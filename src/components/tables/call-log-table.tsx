@@ -172,9 +172,9 @@ export function CallLogTable({
                             "text-[9px] uppercase font-bold tracking-wider",
                             call.callType === "campaign" ? "text-fuchsia-500/80" :
                             call.callType === "lead" ? "text-emerald-500/80" :
-                            "text-purple-400 font-semibold"
+                            "text-purple-400 font-bold"
                           )}>
-                            {call.callType === "internal" ? "Internal" : call.callType}
+                            {call.callType === "internal" ? "INTERNAL" : call.callType}
                           </span>
                         )}
                         <span>

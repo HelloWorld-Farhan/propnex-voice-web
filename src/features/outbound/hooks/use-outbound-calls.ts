@@ -164,7 +164,7 @@ export function useOutboundCalls() {
       document.addEventListener("visibilitychange", onVisibilityChange);
     }
 
-    // Adaptive polling: 3s if calls are active/ringing, 20s when all calls are terminal
+    // Adaptive polling: 1.5s if calls are active/ringing, 3s for real-time pickup of external/internal dials
     let pollTimeout: ReturnType<typeof setTimeout> | null = null;
     let isCancelled = false;
 
@@ -172,9 +172,9 @@ export function useOutboundCalls() {
       if (isCancelled) return;
       const hasLiveCalls = callsRef.current.some((c: any) => {
         const s = (c.status || "").toLowerCase();
-        return s === "ringing" || s === "in-progress" || s === "answered";
+        return s === "ringing" || s === "in-progress" || s === "answered" || s === "queued" || s === "dispatching";
       });
-      const delayMs = hasLiveCalls ? 3000 : 20000;
+      const delayMs = hasLiveCalls ? 1500 : 3000;
 
       pollTimeout = setTimeout(async () => {
         if (isCancelled) return;

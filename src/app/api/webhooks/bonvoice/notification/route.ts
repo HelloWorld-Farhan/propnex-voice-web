@@ -158,16 +158,18 @@ export async function POST(req: Request) {
         
         // Attempt to find company by loose DID match (search for any PhoneNumber containing DID digits)
         let fallbackCompanyId: string | undefined = undefined;
+        let matchedPhoneNumberId: string | undefined = undefined;
         if (didNumber) {
           const didCore = getCoreNumber(didNumber);
           if (didCore) {
             const looseMatch = await prisma.phoneNumber.findFirst({
               where: { number: { contains: didCore } },
-              select: { companyId: true },
+              select: { id: true, companyId: true },
               orderBy: { updatedAt: "desc" },
             });
             if (looseMatch?.companyId) {
               fallbackCompanyId = looseMatch.companyId;
+              matchedPhoneNumberId = looseMatch.id;
               console.log(`Bonvoice Notification: Found fallback company ${fallbackCompanyId} via loose DID match`);
             }
           }
@@ -184,13 +186,42 @@ export async function POST(req: Request) {
           if (isNaN(parsedStartTime.getTime())) parsedStartTime = new Date();
         }
 
+        let leadId: string | undefined = undefined;
+        if (callerCore && fallbackCompanyId) {
+          let lead = await prisma.lead.findFirst({
+            where: { companyId: fallbackCompanyId, phone: { contains: callerCore } },
+          });
+          if (!lead && callerNumber) {
+            try {
+              let stage = await prisma.leadPipelineStage.findFirst({ where: { companyId: fallbackCompanyId } });
+              if (!stage) {
+                stage = await prisma.leadPipelineStage.create({
+                  data: { companyId: fallbackCompanyId, name: "New", slug: "new", order: 1 }
+                });
+              }
+              lead = await prisma.lead.create({
+                data: {
+                  companyId: fallbackCompanyId,
+                  phone: callerNumber.startsWith("+") ? callerNumber : `+91${callerNumber.replace(/\D/g, "").slice(-10)}`,
+                  firstName: "Internal",
+                  lastName: "Call",
+                  stageId: stage.id,
+                }
+              });
+            } catch (errLead) {}
+          }
+          if (lead) leadId = lead.id;
+        }
+
         await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}`,
             publicId:        `bonvoice-${Date.now()}`,
-            direction:       isInbound ? "INBOUND" : "OUTBOUND",
+            direction:       "OUTBOUND",
             status:          mappedStatus as any,
             companyId:       fallbackCompanyId,
+            phoneNumberId:   matchedPhoneNumberId,
+            leadId,
             providerCallId:  callID ? String(callID) : undefined,
             startedAt:       parsedStartTime,
             answeredAt:      mappedStatus === "ANSWERED" ? new Date() : undefined,
@@ -202,24 +233,22 @@ export async function POST(req: Request) {
           },
         });
       } else {
-        // If this is an INBOUND call, ONLY candidates assigned as INBOUND or BOTH are eligible.
-        // If an outbound number of a sub-company or main company is dialed from outside,
-        // and that number is NOT assigned for inbound (direction is OUTBOUND only):
-        // -> do NOT link to the company, do NOT increase inbound total, do NOT charge any credits.
-        //
-        // IMPORTANT: Only apply this filter when direction is EXPLICITLY "inbound".
-        // If direction is unknown/missing (e.g. external outbound call via Postman/API that omits Direction),
-        // we must NOT drop the call — it should still be recorded as an outbound internal call.
+        // If this is an INBOUND call on an OUTBOUND-only number (e.g. manual bridging or external dial),
+        // we record it under the owning company as an OUTBOUND internal call so it displays live.
+        let isOutboundOnlyInbound = false;
         let filtered = candidates;
         if (isInbound && isDirectionExplicit) {
-          filtered = candidates.filter(p => {
+          const strictlyInbound = candidates.filter(p => {
             const dir = (p.direction || "").toUpperCase();
             return dir === "INBOUND" || dir === "BOTH";
           });
 
-          if (filtered.length === 0) {
-            console.log(`Bonvoice Notification: Inbound call received on OUTBOUND-only number (${didNumber}). Dropping company association - no inbound stats increase and no credit deduction.`);
-            return NextResponse.json({ success: true, message: "Ignored inbound call to outbound-only number" });
+          if (strictlyInbound.length > 0) {
+            filtered = strictlyInbound;
+          } else {
+            isOutboundOnlyInbound = true;
+            filtered = candidates;
+            console.log(`Bonvoice Notification: External/internal call on OUTBOUND-only number (${didNumber}). Recording as outbound internal call.`);
           }
         }
 
@@ -333,17 +362,19 @@ export async function POST(req: Request) {
           return NextResponse.json({ success: true });
         }
 
+        const effectiveDirection = (isInbound && !isOutboundOnlyInbound) ? "INBOUND" : "OUTBOUND";
+
         // No existing platform log found — create a new one (call initiated outside platform)
         const newLog = await prisma.callLog.create({
           data: {
             callLogId:       `CL${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
             publicId:        `bonvoice-${Date.now()}-${targetPhoneNumber.id.substring(0, 5)}`,
-            direction:       isInbound ? "INBOUND" : "OUTBOUND",
+            direction:       effectiveDirection,
             status:          mappedStatus as any,
             companyId:       targetPhoneNumber.companyId ?? undefined,
             phoneNumberId:   targetPhoneNumber.id,
             leadId:          lead?.id ?? undefined,
-            aiAgentId:       isInbound ? (targetPhoneNumber.inboundAgentId ?? undefined) : (targetPhoneNumber.outboundAgentId ?? undefined),
+            aiAgentId:       effectiveDirection === "INBOUND" ? (targetPhoneNumber.inboundAgentId ?? undefined) : (targetPhoneNumber.outboundAgentId ?? undefined),
             providerCallId:  callID ? String(callID) : undefined,
             startedAt:       parsedStartTime,
             answeredAt:      mappedStatus === "ANSWERED" ? new Date() : undefined,
