@@ -72,6 +72,23 @@ export async function GET(req: NextRequest) {
       ];
     }
 
+    // Resolve all phone numbers assigned to these companies so shared numbers
+    // (and their real-time ringing / call history) appear across every account.
+    const companyPhoneNumbers = await prisma.phoneNumber.findMany({
+      where: { companyId: { in: companyIdsToQuery } },
+      select: { id: true, number: true },
+    });
+    const companyPhoneIds = companyPhoneNumbers.map((p: any) => p.id);
+    const companyNumberCores = companyPhoneNumbers
+      .map((p: any) => getCoreNumber(p.number))
+      .filter(Boolean) as string[];
+
+    const companyOrConditions: any[] = [
+      { companyId: { in: companyIdsToQuery } },
+      ...(companyPhoneIds.length > 0 ? [{ phoneNumberId: { in: companyPhoneIds } }] : []),
+      ...(companyNumberCores.length > 0 ? companyNumberCores.map((c: string) => ({ historicalDidString: { contains: c } })) : []),
+    ];
+
     const page = parseInt(searchParams.get("page") || "1", 10);
     const limit = parseInt(searchParams.get("limit") || "10", 10);
     const skip = (page - 1) * limit;
@@ -89,8 +106,8 @@ export async function GET(req: NextRequest) {
     const directionVal = directionParam?.toUpperCase() === "OUTBOUND" ? "OUTBOUND" : "INBOUND";
 
     const whereClause: any = {
-      companyId: { in: companyIdsToQuery },
       direction: directionVal,
+      OR: companyOrConditions,
       // Exclude inbound calls that came in on a number configured as OUTBOUND-only
       // (calls with no linked phoneNumber are still shown)
       ...(directionVal === "INBOUND" ? {
@@ -207,8 +224,8 @@ export async function GET(req: NextRequest) {
     // On Page 2, 3, etc., live calls are not prepended, displaying pure historical page data.
     const shouldIncludeLive = page === 1 && (!statusParam || statusParam === "all" || statusParam.toLowerCase() === "ringing" || statusParam.toLowerCase() === "answered");
     const liveWhereClause: any = {
-      companyId: { in: companyIdsToQuery },
       direction: directionVal,
+      OR: companyOrConditions,
       status: { in: ["RINGING", "ANSWERED", "QUEUED"] },
       ...(directionVal === "INBOUND" ? {
         NOT: { phoneNumber: { direction: "OUTBOUND" } }
@@ -322,7 +339,7 @@ export async function GET(req: NextRequest) {
       }
 
       const custRaw = call.lead?.phone || fallbackCustomerNumber || "";
-      const assignRaw = call.phoneNumber?.number || fallbackAssignedNumber || "";
+      const assignRaw = call.phoneNumber?.number || call.historicalDidString || fallbackAssignedNumber || "";
 
       const rawInboundStatus = call.status.toLowerCase();
       const inboundDisplayStatus =
