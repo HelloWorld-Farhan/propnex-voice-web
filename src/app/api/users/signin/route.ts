@@ -262,10 +262,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "Your account has been suspended. Please contact support." }, { status: 403 });
     }
 
-    const { trusted, trustedAt } = body as { trusted?: boolean; trustedAt?: string; domainUrl?: string };
+    const { deviceTrustToken, domainUrl: bodyDomainUrl } = body as { deviceTrustToken?: string; domainUrl?: string; trusted?: boolean; trustedAt?: string };
+    if (bodyDomainUrl) domainUrl = bodyDomainUrl;
 
-    // When device is remembered/trusted, bypass OTP verification directly and issue auth token
-    const effectiveTrusted = Boolean(trusted);
+    let effectiveTrusted = false;
+    let trustInvalidated = false;
+
+    if (deviceTrustToken) {
+      try {
+        const decoded: any = jwt.verify(deviceTrustToken, JWT_SECRET);
+        const expectedPswSig = userAny.passwordHash ? userAny.passwordHash.slice(-10) : "default";
+        if (
+          decoded &&
+          decoded.type === "device_trust" &&
+          (decoded.email || "").toLowerCase() === user.email.toLowerCase() &&
+          decoded.pswSig === expectedPswSig
+        ) {
+          effectiveTrusted = true;
+        } else {
+          // Token is for another account or password hash signature changed (password reset/changed)
+          trustInvalidated = true;
+        }
+      } catch {
+        // Expired or invalid signature
+        trustInvalidated = true;
+      }
+    }
 
     if (!effectiveTrusted) {
       // Generate 2FA login OTP
@@ -305,7 +327,13 @@ export async function POST(req: NextRequest) {
         }
       }).catch((e: any) => console.warn("OtpLog save failed:", e));
 
-      return NextResponse.json({ message: "OTP required", requireOtp: true }, { status: 200 });
+      return NextResponse.json({
+        message: trustInvalidated
+          ? "Password has been changed or device trust expired. Please enter the OTP sent to your email."
+          : "OTP required",
+        requireOtp: true,
+        trustInvalidated
+      }, { status: 200 });
     }
 
     let companyId: string | null = null;

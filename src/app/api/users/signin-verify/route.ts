@@ -90,9 +90,21 @@ export async function POST(req: NextRequest) {
       { expiresIn: "365d" }
     );
 
+    const deviceTrustToken = jwt.sign(
+      {
+        sub: user.id,
+        email: user.email.toLowerCase(),
+        pswSig: user.passwordHash ? user.passwordHash.slice(-10) : "default",
+        type: "device_trust"
+      },
+      JWT_SECRET,
+      { expiresIn: "365d" }
+    );
+
     return NextResponse.json({
       accessToken,
       access_token: accessToken,
+      deviceTrustToken,
       user: {
         id: user.id,
         firstName: user.firstName,

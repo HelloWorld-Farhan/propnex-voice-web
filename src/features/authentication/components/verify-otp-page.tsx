@@ -115,12 +115,16 @@ export function VerifyOtpPageContent() {
         if (!res.ok) { setMessage(data.message || "Invalid OTP"); return; }
 
         const rememberMe = localStorage.getItem("login_remember_me");
-        if (rememberMe === "true" || localStorage.getItem("trusted_emails")) {
-          // Store trust as { email, trustedAt } so future logins bypass OTP
-          let trusted: { email: string; trustedAt: string }[] = [];
+        if (rememberMe === "true" && data.deviceTrustToken) {
+          // Store trust as { email, deviceTrustToken, trustedAt } so future logins bypass OTP
+          let trusted: { email: string; deviceTrustToken: string; trustedAt: string }[] = [];
           try { trusted = JSON.parse(localStorage.getItem("trusted_devices") || "[]"); } catch {}
-          trusted = trusted.filter(t => t.email.toLowerCase() !== email.toLowerCase());
-          trusted.push({ email: email.toLowerCase(), trustedAt: new Date().toISOString() });
+          trusted = trusted.filter(t => (t.email || "").toLowerCase() !== email.toLowerCase());
+          trusted.push({
+            email: email.toLowerCase(),
+            deviceTrustToken: data.deviceTrustToken,
+            trustedAt: new Date().toISOString()
+          });
           localStorage.setItem("trusted_devices", JSON.stringify(trusted));
 
           let trustedEmails: string[] = [];
@@ -130,6 +134,7 @@ export function VerifyOtpPageContent() {
           }
           localStorage.setItem("trusted_emails", JSON.stringify(trustedEmails));
         }
+        localStorage.removeItem("login_remember_me");
         localStorage.setItem("accessToken", data.accessToken);
         localStorage.setItem("access_token", data.access_token);
         localStorage.setItem("user", JSON.stringify(data.user));

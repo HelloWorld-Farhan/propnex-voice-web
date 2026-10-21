@@ -18,33 +18,41 @@ export function SignInPageContent() {
   const [isLockedOut, setIsLockedOut] = useState(false);
 
   const [emailValue, setEmailValue] = useState("");
-  const [trustedEmails, setTrustedEmails] = useState<string[]>([]);
+  interface TrustedDevice {
+    email: string;
+    deviceTrustToken?: string;
+    trustedAt?: string;
+  }
+  const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
 
-  // Load trusted emails & devices on mount
+  // Load trusted devices on mount
   useEffect(() => {
     try {
-      const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
       const storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
-      const deviceEmails = storedDevices.map((d: any) => (d.email || "").toLowerCase());
-      const combined = Array.from(new Set([...storedEmails.map((e: string) => e.toLowerCase()), ...deviceEmails]));
-      setTrustedEmails(combined);
+      if (Array.isArray(storedDevices)) {
+        setTrustedDevices(storedDevices);
+      }
     } catch (e) {}
   }, []);
 
-  const isCurrentEmailTrusted = trustedEmails.includes(emailValue.toLowerCase().trim());
+  const cleanEmail = emailValue.toLowerCase().trim();
+  const currentDeviceTrust = trustedDevices.find(
+    (d) => (d.email || "").toLowerCase() === cleanEmail && Boolean(d.deviceTrustToken)
+  );
+  const isCurrentEmailTrusted = Boolean(currentDeviceTrust);
 
   function handleForgetDevice(email: string) {
     const clean = email.toLowerCase().trim();
     try {
-      const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
-      const filteredEmails = storedEmails.filter((e: string) => e.toLowerCase() !== clean);
-      localStorage.setItem("trusted_emails", JSON.stringify(filteredEmails));
-
-      const storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
-      const filteredDevices = storedDevices.filter((d: any) => (d.email || "").toLowerCase() !== clean);
+      const storedDevices: TrustedDevice[] = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
+      const filteredDevices = storedDevices.filter((d) => (d.email || "").toLowerCase() !== clean);
       localStorage.setItem("trusted_devices", JSON.stringify(filteredDevices));
 
-      setTrustedEmails(filteredEmails.map((e: string) => e.toLowerCase()));
+      const storedEmails: string[] = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
+      const filteredEmails = storedEmails.filter((e) => e.toLowerCase() !== clean);
+      localStorage.setItem("trusted_emails", JSON.stringify(filteredEmails));
+
+      setTrustedDevices(filteredDevices);
       setRememberMe(false);
     } catch {}
   }
@@ -73,23 +81,12 @@ export function SignInPageContent() {
     setSubmitting(true);
 
     try {
-      const isTrusted = isCurrentEmailTrusted || rememberMe;
-
-      // Get timestamp of trust
-      let trustedAt: string = new Date().toISOString();
-      if (isCurrentEmailTrusted) {
-        try {
-          const devices: { email: string; trustedAt: string }[] = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
-          const device = devices.find(d => (d.email || "").toLowerCase() === email);
-          if (device?.trustedAt) trustedAt = device.trustedAt;
-        } catch {}
-      }
+      const deviceTrustToken = isCurrentEmailTrusted ? currentDeviceTrust?.deviceTrustToken : undefined;
 
       const response = await axios.post(`/api/users/signin`, {
         email,
         password,
-        trusted: isTrusted,
-        trustedAt,
+        deviceTrustToken,
         domainUrl: window.location.origin,
       });
 
@@ -97,6 +94,9 @@ export function SignInPageContent() {
 
       if (data.requireOtp) {
         localStorage.setItem("login_email", email);
+        if (data.trustInvalidated) {
+          handleForgetDevice(email);
+        }
         if (rememberMe || isCurrentEmailTrusted) {
           localStorage.setItem("login_remember_me", "true");
         } else {
@@ -110,21 +110,6 @@ export function SignInPageContent() {
       localStorage.setItem("accessToken", data.accessToken);
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
-
-      // If user selected rememberMe or was already trusted, ensure it is stored
-      if (isTrusted) {
-        try {
-          const storedEmails = JSON.parse(localStorage.getItem("trusted_emails") || "[]");
-          if (!storedEmails.map((e: string) => e.toLowerCase()).includes(email)) {
-            storedEmails.push(email);
-            localStorage.setItem("trusted_emails", JSON.stringify(storedEmails));
-          }
-          let storedDevices = JSON.parse(localStorage.getItem("trusted_devices") || "[]");
-          storedDevices = storedDevices.filter((d: any) => (d.email || "").toLowerCase() !== email);
-          storedDevices.push({ email, trustedAt: new Date().toISOString() });
-          localStorage.setItem("trusted_devices", JSON.stringify(storedDevices));
-        } catch {}
-      }
 
       router.replace(AUTH_ROUTES.dashboard);
     } catch (err: any) {
@@ -204,7 +189,7 @@ export function SignInPageContent() {
                 className="sr-only"
               />
               <div
-                className={`flex size-4.5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                className={`flex size-4.5 shrink-0 items-center justify-center rounded-full border transition-all duration-200 ${
                   rememberMe
                     ? "border-fuchsia-500 bg-gradient-to-tr from-fuchsia-600 to-purple-600 text-white shadow-sm"
                     : "border-white/30 bg-black/40 group-hover:border-fuchsia-400/60"
