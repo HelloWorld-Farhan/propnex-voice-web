@@ -439,12 +439,12 @@ export function CampaignCard({
         return { stage: "Q3", date: hist.csvName, processed, total };
       }
       if (hist.q2?.status === "Running") {
-        const processed = (hist.q2.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || l.isAttempted || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
+        const processed = (hist.q2.failedLeads || []).filter((l: any) => l.isCompleted || (l.isAttempted && l.isFailed) || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
         const total = hist.q2.failedLeads?.length || 0;
         return { stage: "Q2", date: hist.csvName, processed, total };
       }
       if (hist.q1?.status === "Running") {
-        const processed = (hist.q1.failedLeads || []).filter((l: any) => l.isCompleted || l.isFailed || l.isAttempted || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
+        const processed = (hist.q1.failedLeads || []).filter((l: any) => l.isCompleted || (l.isAttempted && l.isFailed) || l.isRinging || LIVE_STATUSES.includes((l.status || "").toUpperCase())).length;
         const total = hist.q1.failedLeads?.length || 0;
         return { stage: "Q1", date: hist.csvName, processed, total };
       }
@@ -1225,7 +1225,7 @@ export function CampaignCard({
                             const getProcessedCount = (wave: any) => {
                               if (!wave?.failedLeads) return 0;
                               return wave.failedLeads.filter((l: any) => {
-                                if (l.isCompleted || l.isFailed || l.isAttempted) return true;
+                                if (l.isCompleted || (l.isAttempted && l.isFailed)) return true;
                                 const s = (l.status || "").toUpperCase();
                                 return !!l.isRinging || LIVE_STATUSES.includes(s);
                               }).length;
@@ -1393,7 +1393,7 @@ export function CampaignCard({
                           const paginatedLeads = nonRingingLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
                           const setWavePage = (page: number) => setWavePages(prev => ({ ...prev, [`${activeHist.id}-${wave.stage}`]: page }));
 
-                          const processedCount = allWaveLeads.filter((l: any) => l.isCompleted || l.isFailed || isLeadRinging(l) || l.isAttempted).length;
+                          const processedCount = allWaveLeads.filter((l: any) => l.isCompleted || (l.isAttempted && l.isFailed) || isLeadRinging(l)).length;
                           const totalCount = allWaveLeads.length;
                           
                           return (
